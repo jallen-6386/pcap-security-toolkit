@@ -10,13 +10,16 @@ def analyze_flows(packets):
     protocol_counter = Counter()
     conversation_counter = Counter()
     flow_bytes = defaultdict(int)
+    flow_packets = defaultdict(int)
+    flow_times = defaultdict(list)
 
     total_packets = 0
     total_bytes = 0
 
     for pkt in packets:
         total_packets += 1
-        total_bytes += len(pkt)
+        pkt_len = len(pkt)
+        total_bytes += pkt_len
 
         if IP not in pkt:
             continue
@@ -42,7 +45,16 @@ def analyze_flows(packets):
 
         conv = f"{src}:{sport} -> {dst}:{dport} ({proto})"
         conversation_counter[conv] += 1
-        flow_bytes[(src, dst, sport, dport, proto)] += len(pkt)
+
+        flow_key = (src, dst, sport, dport, proto)
+        flow_bytes[flow_key] += pkt_len
+        flow_packets[flow_key] += 1
+
+        if hasattr(pkt, "time"):
+            try:
+                flow_times[flow_key].append(float(pkt.time))
+            except Exception:
+                pass
 
     return {
         "summary": {
@@ -55,4 +67,6 @@ def analyze_flows(packets):
         "protocol_counter": protocol_counter,
         "conversation_counter": conversation_counter,
         "flow_bytes": flow_bytes,
+        "flow_packets": flow_packets,
+        "flow_times": flow_times,
     }

@@ -1,8 +1,19 @@
 import csv
 import io
 import subprocess
+import sys
 
 from modules.dependencies import find_tshark
+
+
+def set_csv_field_limit():
+    max_size = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(max_size)
+            break
+        except OverflowError:
+            max_size = max_size // 10
 
 
 def run_tshark_fields(pcap_path, fields, display_filter=None):
@@ -24,6 +35,7 @@ def run_tshark_fields(pcap_path, fields, display_filter=None):
     if result.returncode != 0:
         return [], result.stderr.strip()
 
+    set_csv_field_limit()
     reader = csv.DictReader(io.StringIO(result.stdout))
     return list(reader), None
 
@@ -43,7 +55,6 @@ def extract_http_fields(pcap_path):
         "http.user_agent",
         "http.content_type",
         "http.content_length",
-        "http.content_disposition",
         "http.file_data",
     ]
     return run_tshark_fields(pcap_path, fields, display_filter="http")

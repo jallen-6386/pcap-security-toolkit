@@ -343,23 +343,7 @@ def write_extracted_payload_index(path: Path, rows: list[dict]) -> None:
         path.write_text("", encoding="utf-8")
         return
 
-    fieldnames = [
-        "tcp_stream",
-        "src_ip",
-        "src_port",
-        "dst_ip",
-        "dst_port",
-        "ascii_stream_file",
-        "raw_stream_file",
-        "output_file",
-        "filename",
-        "content_type",
-        "source",
-        "used_raw_bytes",
-        "is_text",
-        "size_bytes",
-        "preview",
-    ]
+    fieldnames = sorted(set().union(*(row.keys() for row in rows)))
 
     with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)

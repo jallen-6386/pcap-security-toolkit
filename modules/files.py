@@ -12,16 +12,12 @@ def extract_file_indicators(http_rows, smb_rows, ftp_rows):
 
     for row in http_rows:
         uri = row.get("http.request.uri", "") or ""
-        disposition = row.get("http.content_disposition", "") or ""
         filename = None
 
         if "/" in uri:
             candidate = uri.rstrip("/").split("/")[-1]
             if "." in candidate and len(candidate) < 260:
                 filename = candidate
-
-        if disposition and "filename=" in disposition.lower():
-            filename = disposition
 
         if filename:
             results.append({
@@ -31,7 +27,7 @@ def extract_file_indicators(http_rows, smb_rows, ftp_rows):
                 "tcp_stream": row.get("tcp.stream", ""),
                 "protocol": "HTTP",
                 "filename": filename,
-                "source_field": "http.request.uri/http.content_disposition",
+                "source_field": "http.request.uri",
                 "context": uri,
             })
 
