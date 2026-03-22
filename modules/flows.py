@@ -1,6 +1,9 @@
 from collections import Counter, defaultdict
-from scapy.all import IP, TCP, UDP
+
+from scapy.layers.inet import IP, TCP, UDP
+
 from modules.utils import human_readable_bytes
+
 
 def analyze_flows(packets):
     ip_counter = Counter()

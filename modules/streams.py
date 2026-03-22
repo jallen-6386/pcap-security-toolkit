@@ -2,9 +2,15 @@ import csv
 import io
 import subprocess
 
+from modules.dependencies import find_tshark
+
 
 def run_tshark_fields(pcap_path, fields, display_filter=None):
-    cmd = ["tshark", "-r", str(pcap_path), "-T", "fields"]
+    tshark_path = find_tshark()
+    if not tshark_path:
+        return [], "TShark not found"
+
+    cmd = [tshark_path, "-r", str(pcap_path), "-T", "fields"]
 
     if display_filter:
         cmd.extend(["-Y", display_filter])
@@ -36,8 +42,12 @@ def extract_tcp_stream_index(pcap_path):
 
 
 def export_follow_stream(pcap_path, stream_id, mode="ascii"):
+    tshark_path = find_tshark()
+    if not tshark_path:
+        return None, "TShark not found"
+
     cmd = [
-        "tshark",
+        tshark_path,
         "-r", str(pcap_path),
         "-q",
         "-z", f"follow,tcp,{mode},{stream_id}",

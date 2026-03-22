@@ -10,13 +10,13 @@ import sys
 from pathlib import Path
 
 try:
-    from scapy.all import rdpcap
+    from scapy.utils import rdpcap
 except ImportError:
     print("[!] Missing dependency: scapy")
     print("[!] Please run bootstrap or install requirements:")
-    print("    python3 bootstrap.py")
+    print("    python bootstrap.py")
     print("    OR")
-    print("    pip install -r requirements.txt")
+    print("    python -m pip install -r requirements.txt --no-user")
     sys.exit(1)
 
 from config import OUTPUT_DIR

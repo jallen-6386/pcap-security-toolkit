@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import platform
 import shutil
 import subprocess
@@ -46,6 +47,13 @@ def get_venv_activate_command() -> str:
     return "source .venv/bin/activate"
 
 
+def build_clean_env() -> dict:
+    env = dict(os.environ)
+    env.pop("PIP_USER", None)
+    env.pop("PYTHONHOME", None)
+    return env
+
+
 def install_python_requirements():
     venv_python = get_venv_python()
     if not venv_python.exists():
@@ -56,9 +64,40 @@ def install_python_requirements():
         print(f"[!] requirements.txt not found: {REQUIREMENTS_FILE}")
         return
 
+    env = build_clean_env()
+
     print("[*] Installing Python requirements...")
-    subprocess.run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"], check=False)
-    subprocess.run([str(venv_python), "-m", "pip", "install", "-r", str(REQUIREMENTS_FILE)], check=False)
+    upgrade = subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "--no-user"],
+        check=False,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    if upgrade.stdout:
+        print(upgrade.stdout, end="")
+    if upgrade.stderr:
+        print(upgrade.stderr, end="")
+
+    install = subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "-r", str(REQUIREMENTS_FILE), "--no-user"],
+        check=False,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    if install.stdout:
+        print(install.stdout, end="")
+    if install.stderr:
+        print(install.stderr, end="")
+
+    if upgrade.returncode != 0 or install.returncode != 0:
+        print("[!] Python requirements installation reported an issue.")
+        print("[!] If you saw '--user' related errors, bootstrap already tried to bypass them.")
+        print("[!] You can also run this manually:")
+        print(f"    {get_venv_python()} -m pip install -r requirements.txt --no-user")
+        return
+
     print("[+] Python requirements installation finished.")
 
 
@@ -73,12 +112,36 @@ def install_tshark_mac():
     print("[+] Installation attempt finished.")
 
 
+def find_tshark() -> str | None:
+    tshark = shutil.which("tshark")
+    if tshark:
+        return tshark
+
+    possible_paths = [
+        r"C:\Program Files\Wireshark\tshark.exe",
+        r"C:\Program Files (x86)\Wireshark\tshark.exe",
+        "/opt/homebrew/bin/tshark",
+        "/usr/local/bin/tshark",
+        "/usr/bin/tshark",
+    ]
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+
+    return None
+
+
 def main():
     print("=" * 70)
     print("PCAP Security Toolkit Bootstrap")
     print("=" * 70)
     print(f"[*] Python: {sys.executable}")
     print(f"[*] Platform: {platform.system()} {platform.release()}")
+
+    if os.environ.get("PIP_USER"):
+        print(f"[!] Detected PIP_USER={os.environ.get('PIP_USER')}")
+        print("[!] Bootstrap will ignore this for installs inside the virtual environment.")
 
     if not VENV_DIR.exists():
         if ask_yes_no("Virtual environment not found. Create it now?"):
@@ -89,15 +152,18 @@ def main():
     if ask_yes_no("Install or refresh Python requirements?"):
         install_python_requirements()
 
-    if command_exists("tshark"):
-        print("[+] TShark is installed.")
+    tshark_path = find_tshark()
+    if tshark_path:
+        print(f"[+] TShark is installed: {tshark_path}")
     else:
-        print("[!] TShark is not installed.")
+        print("[!] TShark is not installed or not detected.")
         if platform.system() == "Darwin":
             if ask_yes_no("Would you like to install TShark using Homebrew now?"):
                 install_tshark_mac()
-        else:
-            print("[!] Auto-install is only included for macOS in this version.")
+        elif platform.system() == "Windows":
+            print(r"[*] Windows tip: if tshark.exe is already installed, this toolkit can auto-detect it")
+            print(r"    in C:\Program Files\Wireshark\tshark.exe")
+            print(r"    or C:\Program Files (x86)\Wireshark\tshark.exe")
 
     print("\n[+] Bootstrap complete.")
     print("[*] To run the toolkit with the virtual environment:")

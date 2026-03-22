@@ -1,8 +1,21 @@
 from collections import Counter
-from scapy.all import DNS, DNSQR, IP, Raw
+
+from scapy.layers.dns import DNS, DNSQR
+from scapy.layers.inet import IP
+from scapy.packet import Raw
+
 from modules.utils import safe_decode
 
-HTTP_METHODS = (b"GET ", b"POST ", b"PUT ", b"DELETE ", b"HEAD ", b"OPTIONS ", b"PATCH ")
+HTTP_METHODS = (
+    b"GET ",
+    b"POST ",
+    b"PUT ",
+    b"DELETE ",
+    b"HEAD ",
+    b"OPTIONS ",
+    b"PATCH ",
+)
+
 
 def parse_http_payload(payload: bytes):
     text = safe_decode(payload[:8192])
@@ -34,6 +47,7 @@ def parse_http_payload(payload: bytes):
             result["cookie"] = line.strip()
 
     return result
+
 
 def analyze_dns_http_tls(packets):
     dns_queries = Counter()
