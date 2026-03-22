@@ -2,7 +2,7 @@
 
 """
 PCAP Security Toolkit
-Version: 1.4.0
+Version: 1.5.0
 """
 
 import argparse
@@ -23,19 +23,24 @@ from config import OUTPUT_DIR
 from modules.cases import get_case_output_dir
 from modules.dependencies import has_tshark
 from modules.detections import (
-    annotate_extracted_payload_types,
     build_alerts,
     build_suspicious_downloads,
-    decode_base64_payloads,
     detect_beaconing,
+    detect_entropy_exfil_candidates,
+    detect_tls_sni_anomalies,
     find_credential_indicators,
+    reconstruct_credential_posts,
 )
 from modules.dns_http_tls import analyze_dns_http_tls
 from modules.exporters import write_csv, write_json
 from modules.files import build_http_body_previews, extract_file_indicators
 from modules.flows import analyze_flows
 from modules.https_metadata import extract_tls_metadata, summarize_tls_rows
-from modules.payloads import save_extracted_payloads, write_extracted_payload_index
+from modules.payloads import (
+    carve_files_from_raw_streams,
+    save_extracted_payloads,
+    write_extracted_payload_index,
+)
 from modules.streams import (
     export_follow_stream,
     extract_tcp_stream_index,
@@ -65,10 +70,13 @@ def print_report_summary(report: dict) -> None:
     print(f"TLS Metadata Rows: {report.get('tls_metadata_count', 0)}")
     print(f"File Indicators: {report.get('file_indicators_count', 0)}")
     print(f"Extracted Payloads: {report.get('extracted_payload_count', 0)}")
-    print(f"Base64 Decodes: {report.get('decoded_payload_count', 0)}")
     print(f"Credential Findings: {report.get('credential_finding_count', 0)}")
+    print(f"Credential POSTs: {report.get('credential_post_count', 0)}")
     print(f"Suspicious Downloads: {report.get('suspicious_download_count', 0)}")
+    print(f"Entropy Exfil Candidates: {report.get('entropy_exfil_candidate_count', 0)}")
     print(f"Beaconing Candidates: {report.get('beaconing_candidate_count', 0)}")
+    print(f"TLS SNI Anomalies: {report.get('tls_sni_anomaly_count', 0)}")
+    print(f"Carved Files: {report.get('carved_file_count', 0)}")
     print(f"Alerts: {report.get('alerts_count', 0)}")
 
     print("\nTop Protocols:")
@@ -126,7 +134,7 @@ def main():
     case_output_dir = get_case_output_dir(OUTPUT_DIR, args.case)
 
     print("=" * 70)
-    print("PCAP SECURITY TOOLKIT v1.4.0")
+    print("PCAP SECURITY TOOLKIT v1.5.0")
     print("=" * 70)
 
     print(f"[*] Loading packets from {pcap_path}")
@@ -146,10 +154,14 @@ def main():
     tls_summary = []
     http_body_previews = []
     extracted_payloads = []
-    decoded_payloads = []
-    credential_findings = []
-    suspicious_downloads = []
+    carved_files = []
+
     beaconing_candidates = detect_beaconing(flow_data["flow_times"], flow_data["flow_bytes"])
+    credential_findings = []
+    credential_posts = []
+    suspicious_downloads = []
+    entropy_exfil_candidates = []
+    tls_sni_anomalies = []
 
     if has_tshark():
         print("[*] Running TShark extraction")
@@ -214,10 +226,14 @@ def main():
                 streams_dir,
                 tcp_stream_rows,
             )
-            extracted_payloads = annotate_extracted_payload_types(extracted_payloads)
 
-            print("[*] Decoding base64 candidates from extracted payloads")
-            decoded_payloads = decode_base64_payloads(extracted_payloads, case_output_dir)
+            print("[*] Carving files from raw TCP streams")
+            carved_files = carve_files_from_raw_streams(
+                case_output_dir,
+                streams_dir,
+                tcp_stream_rows,
+            )
+
     else:
         print("[!] TShark not found. Skipping TShark-assisted extraction.")
 
@@ -227,8 +243,17 @@ def main():
     print("[*] Detecting credential indicators")
     credential_findings = find_credential_indicators(http_body_previews, extracted_payloads)
 
+    print("[*] Reconstructing credential POSTs")
+    credential_posts = reconstruct_credential_posts(http_body_previews)
+
     print("[*] Detecting suspicious downloads")
     suspicious_downloads = build_suspicious_downloads(http_rows, extracted_payloads)
+
+    print("[*] Detecting entropy-based exfil candidates")
+    entropy_exfil_candidates = detect_entropy_exfil_candidates(extracted_payloads)
+
+    print("[*] Detecting TLS SNI anomalies")
+    tls_sni_anomalies = detect_tls_sni_anomalies(tls_summary)
 
     print("[*] Building alerts")
     alerts = build_alerts(
@@ -239,6 +264,9 @@ def main():
         beaconing_candidates=beaconing_candidates,
         credential_findings=credential_findings,
         suspicious_downloads=suspicious_downloads,
+        entropy_exfil_candidates=entropy_exfil_candidates,
+        credential_posts=credential_posts,
+        tls_sni_anomalies=tls_sni_anomalies,
     )
 
     report = {
@@ -254,10 +282,13 @@ def main():
         "tls_metadata_count": len(tls_summary),
         "file_indicators_count": len(file_indicators),
         "extracted_payload_count": len(extracted_payloads),
-        "decoded_payload_count": len(decoded_payloads),
         "credential_finding_count": len(credential_findings),
+        "credential_post_count": len(credential_posts),
         "suspicious_download_count": len(suspicious_downloads),
+        "entropy_exfil_candidate_count": len(entropy_exfil_candidates),
         "beaconing_candidate_count": len(beaconing_candidates),
+        "tls_sni_anomaly_count": len(tls_sni_anomalies),
+        "carved_file_count": len(carved_files),
         "alerts_count": len(alerts),
         "case_output_dir": str(case_output_dir),
     }
@@ -269,13 +300,16 @@ def main():
     write_csv(case_output_dir / "http_body_previews.csv", http_body_previews)
     write_csv(case_output_dir / "tcp_stream_index.csv", tcp_stream_rows)
     write_csv(case_output_dir / "tls_metadata.csv", tls_summary)
+    write_csv(case_output_dir / "tls_sni_anomalies.csv", tls_sni_anomalies)
     write_csv(case_output_dir / "smb_tshark.csv", smb_rows)
     write_csv(case_output_dir / "ftp_tshark.csv", ftp_rows)
     write_csv(case_output_dir / "file_indicators.csv", file_indicators)
     write_csv(case_output_dir / "beaconing_candidates.csv", beaconing_candidates)
     write_csv(case_output_dir / "credential_findings.csv", credential_findings)
+    write_csv(case_output_dir / "credential_posts.csv", credential_posts)
     write_csv(case_output_dir / "suspicious_downloads.csv", suspicious_downloads)
-    write_csv(case_output_dir / "decoded_payloads_index.csv", decoded_payloads)
+    write_csv(case_output_dir / "entropy_exfil_candidates.csv", entropy_exfil_candidates)
+    write_csv(case_output_dir / "carved_files.csv", carved_files)
     write_csv(case_output_dir / "alerts.csv", alerts)
     write_extracted_payload_index(
         case_output_dir / "extracted_payloads_index.csv",
