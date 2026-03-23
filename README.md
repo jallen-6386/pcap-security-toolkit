@@ -266,7 +266,7 @@ tcpstream_5__src_192_168_10_15_51522__to__dst_203_0_113_25_80__document_upload.t
 
 #### report.json
 
-**High-level case summary including:**
+High-level case summary including:
 	•	total packets
 	•	total bytes
 	•	human-readable total size
@@ -291,7 +291,7 @@ tcpstream_5__src_192_168_10_15_51522__to__dst_203_0_113_25_80__document_upload.t
 
 #### alerts.csv
 
-**High-level notable findings such as:**
+High-level notable findings such as:
 	•	large outbound transfer candidates
 	•	credential indicators
 	•	suspicious downloads
@@ -307,7 +307,7 @@ tcpstream_5__src_192_168_10_15_51522__to__dst_203_0_113_25_80__document_upload.t
 
 #### extracted_payloads_index.csv
 
-**Index of extracted payloads including:**
+Index of extracted payloads including:
 	•	filename
 	•	source and destination
 	•	content type
@@ -317,7 +317,7 @@ tcpstream_5__src_192_168_10_15_51522__to__dst_203_0_113_25_80__document_upload.t
 	•	whether raw bytes were used
 	•	a short preview if text
 
-## credential_findings.csv
+#### credential_findings.csv
 
 Credential or token-like patterns found in extracted content or HTTP previews, with severity scoring.
 
@@ -339,7 +339,7 @@ Flows with repeated timing patterns and low jitter that may indicate command-and
 
 #### tls_sni_anomalies.csv
 
-**Suspicious or unusual TLS SNI values such as:**
+Suspicious or unusual TLS SNI values such as:
 	•	overly long names
 	•	digit-heavy names
 	•	hex-like names
@@ -357,17 +357,17 @@ A practical review flow is:
 	3.	Check file_indicators.csv
 	4.	Review http_tshark.csv and http_body_previews.csv
 	5.	If stream export was enabled, review:
-	•	extracted_payloads_index.csv
-	•	extracted_payloads/
-	•	streams/
+	  •	extracted_payloads_index.csv
+	  •	extracted_payloads/
+	  •	streams/
 	6.	Review:
-	•	credential_findings.csv
-	•	credential_posts.csv
-	•	suspicious_downloads.csv
-	•	entropy_exfil_candidates.csv
-	•	beaconing_candidates.csv
-	•	tls_sni_anomalies.csv
-	•	carved_files.csv
+	  •	credential_findings.csv
+	  •	credential_posts.csv
+	  •	suspicious_downloads.csv
+	  •	entropy_exfil_candidates.csv
+	  •	beaconing_candidates.csv
+	  •	tls_sni_anomalies.csv
+	  •	carved_files.csv
 
 ## Troubleshooting
 
@@ -384,7 +384,7 @@ Install Wireshark/TShark and ensure it is available. This toolkit can also auto-
 
 ### No Payloads Extracted
 
-**Possible reasons:**
+Possible reasons:
 	•	traffic is encrypted
 	•	payload is not reconstructable from the capture
 	•	streams were not exported
