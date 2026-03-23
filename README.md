@@ -256,16 +256,18 @@ output/
 tcpstream_5__src_192_168_10_15_51522__to__dst_203_0_113_25_80__document_upload.txt
 
 ```
-**This includes:**
+```text
+This includes:
 	•	TCP stream ID
 	•	Source IP/port
 	•	Destination IP/port
 	•	Original filename when available
+```
 
 ### What the Main Output Files Mean
 
 #### report.json
-
+```text
 High-level case summary including:
 	•	total packets
 	•	total bytes
@@ -288,9 +290,10 @@ High-level case summary including:
 	•	TLS SNI anomaly count
 	•	carved file count
 	•	alert count
+```
 
 #### alerts.csv
-
+```text
 High-level notable findings such as:
 	•	large outbound transfer candidates
 	•	credential indicators
@@ -298,6 +301,7 @@ High-level notable findings such as:
 	•	entropy-based exfil candidates
 	•	beaconing candidates
 	•	TLS SNI anomalies
+  ```
 
 #### http_body_previews.csv
 
@@ -306,7 +310,7 @@ High-level notable findings such as:
 	•	quick triage of visible content
 
 #### extracted_payloads_index.csv
-
+```text
 Index of extracted payloads including:
 	•	filename
 	•	source and destination
@@ -316,6 +320,7 @@ Index of extracted payloads including:
 	•	entropy
 	•	whether raw bytes were used
 	•	a short preview if text
+  ```
 
 #### credential_findings.csv
 
@@ -338,19 +343,20 @@ Large high-entropy payloads sent from private to external destinations that may 
 Flows with repeated timing patterns and low jitter that may indicate command-and-control style beaconing.
 
 #### tls_sni_anomalies.csv
-
+```text
 Suspicious or unusual TLS SNI values such as:
 	•	overly long names
 	•	digit-heavy names
 	•	hex-like names
 	•	suspicious suffixes
+  ```
 
 #### carved_files.csv
 
 Files carved from raw TCP streams based on basic file signatures such as PDF, ZIP, and PE executable.
 
 ## Example Workflow
-
+```text
 A practical review flow is:
 	1.	Open report.json
 	2.	Review alerts.csv
@@ -368,6 +374,7 @@ A practical review flow is:
 	  •	beaconing_candidates.csv
 	  •	tls_sni_anomalies.csv
 	  •	carved_files.csv
+```
 
 ## Troubleshooting
 
@@ -383,12 +390,13 @@ python3 bootstrap.py
 Install Wireshark/TShark and ensure it is available. This toolkit can also auto-detect common TShark locations on Windows and macOS.
 
 ### No Payloads Extracted
-
+```text
 Possible reasons:
 	•	traffic is encrypted
 	•	payload is not reconstructable from the capture
 	•	streams were not exported
 	•	the payload is binary or structured in a way not yet fully supported
+```
 
 ### CSV Field Too Large
 
