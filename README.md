@@ -2,6 +2,10 @@
 
 A versatile Python-based PCAP analysis toolkit for security investigations.
 
+## Author
+
+Created by **John R. Allen**
+
 ## Overview
 
 PCAP Security Toolkit is designed to help analyze `.pcap` and `.pcapng` files across multiple investigation scenarios, including:
@@ -41,8 +45,18 @@ This project uses:
   - TCP stream
   - source IP/port
   - destination IP/port
+- SHA-256 hashing for extracted and decoded payloads
+- File signature enrichment beyond basic file extension matching
+- Credential indicator detection with severity scoring
+- Base64 payload decoding
+- Suspicious download detection
+- Entropy-based exfiltration detection
+- Beaconing and jitter analysis
+- Credential POST reconstruction
+- Raw TCP file carving
+- TLS SNI anomaly detection
 
-  ## Current Capabilities
+## Current Capabilities
 
 The toolkit can currently help with:
 
@@ -51,12 +65,19 @@ The toolkit can currently help with:
 - Identifying top conversations
 - Detecting large private-to-external transfers
 - Surfacing file references from:
-  - HTTP URIs / content-disposition
+  - HTTP URIs / filenames
   - SMB paths / filenames
   - FTP RETR / STOR commands
 - Exporting followed TCP streams for deeper inspection
 - Extracting readable payloads from reconstructable plaintext captures
 - Saving payload bytes to disk with contextual filenames
+- Detecting likely credentials or tokens in HTTP content
+- Identifying suspicious downloads and transferred file types
+- Detecting high-entropy outbound payloads that may indicate exfiltration
+- Highlighting low-jitter beaconing candidates
+- Reconstructing credential-related POST activity
+- Flagging unusual TLS SNI values
+- Carving select file types from raw TCP streams
 
 ## Current Limitations
 
@@ -104,24 +125,9 @@ pcap-security-toolkit/
 ```
 ## Requirements
 
-- Python 3
-- TShark
-- Scapy
-
-## Setup
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/YOUR_USERNAME/pcap-security-toolkit.git
-cd pcap-security-toolkit
-
-```
-## Requirements
-
-- Python 3
-- TShark
-- Scapy
+	•	Python 3
+	•	TShark
+	•	Scapy
 
 ## Setup
 
@@ -193,18 +199,27 @@ Each run creates a dedicated case folder:
 output/
 └── case1/
     ├── alerts.csv
+    ├── beaconing_candidates.csv
+    ├── carved_files.csv
+    ├── credential_findings.csv
+    ├── credential_posts.csv
+    ├── entropy_exfil_candidates.csv
     ├── extracted_payloads/
     ├── extracted_payloads_index.csv
     ├── file_indicators.csv
+    ├── ftp_tshark.csv
+    ├── http_body_previews.csv
     ├── http_requests.csv
     ├── http_tshark.csv
-    ├── http_body_previews.csv
     ├── report.json
+    ├── smb_tshark.csv
     ├── streams/
     │   ├── tcp_stream_0.ascii.txt
     │   ├── tcp_stream_0.raw.txt
+    ├── suspicious_downloads.csv
     ├── tcp_stream_index.csv
-    └── tls_metadata.csv
+    ├── tls_metadata.csv
+    └── tls_sni_anomalies.csv
 
 ```
 
@@ -219,26 +234,141 @@ output/
 	•	http_tshark.csv
 	•	http_body_previews.csv
 	•	tcp_stream_index.csv
+	•	tls_metadata.csv
 
 ### Deep Analysis
 	•	streams/
 	•	extracted_payloads/
 	•	extracted_payloads_index.csv
+	•	credential_findings.csv
+	•	credential_posts.csv
+	•	suspicious_downloads.csv
+	•	entropy_exfil_candidates.csv
+	•	beaconing_candidates.csv
+	•	tls_sni_anomalies.csv
+	•	carved_files.csv
 
 ## Extracted Payloads
 
-Recovered payloads will look like:
+**Recovered payloads will look like:**
 
 ```text
-tcpstream_1__192_168_1_3_65140__to__128_119_245_12_80__alice.txt
+tcpstream_5__src_192_168_10_15_51522__to__dst_203_0_113_25_80__document_upload.txt
 
-This includes:
+```
+**This includes:**
 	•	TCP stream ID
 	•	Source IP/port
 	•	Destination IP/port
-	•	Original filename (if available)
+	•	Original filename when available
 
-```
+### What the Main Output Files Mean
+
+#### report.json
+
+**High-level case summary including:**
+	•	total packets
+	•	total bytes
+	•	human-readable total size
+	•	unique IPs
+	•	top protocols
+	•	top IPs
+	•	top conversations
+	•	top DNS queries
+	•	top HTTP hosts
+	•	top HTTP user agents
+	•	TCP stream count
+	•	HTTP body preview count
+	•	TLS metadata count
+	•	extracted payload count
+	•	credential finding count
+	•	suspicious download count
+	•	entropy exfil candidate count
+	•	beaconing candidate count
+	•	TLS SNI anomaly count
+	•	carved file count
+	•	alert count
+
+#### alerts.csv
+
+**High-level notable findings such as:**
+	•	large outbound transfer candidates
+	•	credential indicators
+	•	suspicious downloads
+	•	entropy-based exfil candidates
+	•	beaconing candidates
+	•	TLS SNI anomalies
+
+#### http_body_previews.csv
+
+	•	form submissions
+	•	POST body review
+	•	quick triage of visible content
+
+#### extracted_payloads_index.csv
+
+**Index of extracted payloads including:**
+	•	filename
+	•	source and destination
+	•	content type
+	•	detected file type
+	•	SHA-256
+	•	entropy
+	•	whether raw bytes were used
+	•	a short preview if text
+
+## credential_findings.csv
+
+Credential or token-like patterns found in extracted content or HTTP previews, with severity scoring.
+
+#### credential_posts.csv
+
+POST bodies where likely credential material was reconstructed.
+
+#### suspicious_downloads.csv
+
+Potentially suspicious downloads or transferred file types based on extension, content type, or detected signature.
+
+#### entropy_exfil_candidates.csv
+
+Large high-entropy payloads sent from private to external destinations that may indicate encoded, encrypted, or compressed exfiltration.
+
+#### beaconing_candidates.csv
+
+Flows with repeated timing patterns and low jitter that may indicate command-and-control style beaconing.
+
+#### tls_sni_anomalies.csv
+
+**Suspicious or unusual TLS SNI values such as:**
+	•	overly long names
+	•	digit-heavy names
+	•	hex-like names
+	•	suspicious suffixes
+
+#### carved_files.csv
+
+Files carved from raw TCP streams based on basic file signatures such as PDF, ZIP, and PE executable.
+
+## Example Workflow
+
+A practical review flow is:
+	1.	Open report.json
+	2.	Review alerts.csv
+	3.	Check file_indicators.csv
+	4.	Review http_tshark.csv and http_body_previews.csv
+	5.	If stream export was enabled, review:
+	•	extracted_payloads_index.csv
+	•	extracted_payloads/
+	•	streams/
+	6.	Review:
+	•	credential_findings.csv
+	•	credential_posts.csv
+	•	suspicious_downloads.csv
+	•	entropy_exfil_candidates.csv
+	•	beaconing_candidates.csv
+	•	tls_sni_anomalies.csv
+	•	carved_files.csv
+
 ## Troubleshooting
 
 ### Missing Scapy
@@ -247,38 +377,51 @@ This includes:
 python3 bootstrap.py
 
 ```
+
 ### TShark Not Found
 
-Install Wireshark/TShark and ensure it is in PATH.
+Install Wireshark/TShark and ensure it is available. This toolkit can also auto-detect common TShark locations on Windows and macOS.
 
 ### No Payloads Extracted
 
-Possible reasons:
+**Possible reasons:**
 	•	traffic is encrypted
-	•	payload not reconstructable
-	•	streams not exported
-	•	binary format not fully supported
+	•	payload is not reconstructable from the capture
+	•	streams were not exported
+	•	the payload is binary or structured in a way not yet fully supported
+
+### CSV Field Too Large
+
+If you encounter a large field parsing error, update to the latest version of the toolkit. The current version raises the Python CSV field limit to support larger http.file_data values.
 
 ## Example Terminal Output
 
 ```text
-PCAP SECURITY TOOLKIT v1.3.0
+PCAP SECURITY TOOLKIT v1.5.0
 
-Total Packets: 175
-Total Bytes: 174143 (170.06 KB)
-TCP Streams: 2
-Extracted Payloads: 1
-Alerts: 2
+Total Packets: 4128
+Total Bytes: 5873210 (5.60 MB)
+TCP Streams: 18
+HTTP Body Previews: 4
+TLS Metadata Rows: 9
+File Indicators: 3
+Extracted Payloads: 5
+Credential Findings: 2
+Credential POSTs: 1
+Suspicious Downloads: 2
+Entropy Exfil Candidates: 1
+Beaconing Candidates: 1
+TLS SNI Anomalies: 1
+Carved Files: 2
+Alerts: 11
 
 ```
+
 ## Future Improvements
 
-- Better binary file reconstruction
-- File hashing (SHA256)
-- File signature detection
-- TLS key log support
-- Advanced exfil detection
-
-## Author
-
-Created by **John R. Allen**
+	•	Deeper file carving across additional signatures
+	•	Better multipart parsing for edge cases
+	•	Optional TLS key log support
+	•	Additional protocol-aware extraction
+	•	Stronger exfil scoring and clustering
+	•	Expanded anomaly detection for C2 patterns
