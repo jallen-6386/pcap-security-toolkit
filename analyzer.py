@@ -150,6 +150,7 @@ def main():
     smb_rows = []
     ftp_rows = []
     tcp_stream_rows = []
+    stream_ids = []
     tls_rows = []
     tls_summary = []
     http_body_previews = []
@@ -181,23 +182,28 @@ def main():
         if stream_err:
             print(f"[!] TCP stream extraction warning: {stream_err}")
 
+        if tcp_stream_rows:
+            stream_ids = get_unique_tcp_stream_ids(tcp_stream_rows)
+
         print("[*] Extracting TLS metadata")
         tls_rows, tls_err = extract_tls_metadata(pcap_path)
         if tls_err:
             print(f"[!] TLS metadata extraction warning: {tls_err}")
-        tls_summary = summarize_tls_rows(tls_rows)
+        if tls_rows:
+            tls_summary = summarize_tls_rows(tls_rows)
 
-        print("[*] Building HTTP body previews")
-        http_body_previews = build_http_body_previews(http_rows)
+        if http_rows:
+            print("[*] Building HTTP body previews")
+            http_body_previews = build_http_body_previews(http_rows)
 
-        if args.export_streams:
+        if args.export_streams and stream_ids:
             streams_dir = case_output_dir / "streams"
             streams_dir.mkdir(parents=True, exist_ok=True)
 
-            stream_ids = get_unique_tcp_stream_ids(tcp_stream_rows)[: args.max_streams]
-            print(f"[*] Exporting up to {len(stream_ids)} TCP streams in ascii and raw modes")
+            export_stream_ids = stream_ids[: args.max_streams]
+            print(f"[*] Exporting up to {len(export_stream_ids)} TCP streams in ascii and raw modes")
 
-            for stream_id in stream_ids:
+            for stream_id in export_stream_ids:
                 ascii_content, ascii_err = export_follow_stream(
                     pcap_path,
                     stream_id,
@@ -240,20 +246,25 @@ def main():
     print("[*] Extracting file indicators")
     file_indicators = extract_file_indicators(http_rows, smb_rows, ftp_rows)
 
-    print("[*] Detecting credential indicators")
-    credential_findings = find_credential_indicators(http_body_previews, extracted_payloads)
+    if http_body_previews or extracted_payloads:
+        print("[*] Detecting credential indicators")
+        credential_findings = find_credential_indicators(http_body_previews, extracted_payloads)
 
-    print("[*] Reconstructing credential POSTs")
-    credential_posts = reconstruct_credential_posts(http_body_previews)
+    if http_body_previews:
+        print("[*] Reconstructing credential POSTs")
+        credential_posts = reconstruct_credential_posts(http_body_previews)
 
-    print("[*] Detecting suspicious downloads")
-    suspicious_downloads = build_suspicious_downloads(http_rows, extracted_payloads)
+    if http_rows or extracted_payloads:
+        print("[*] Detecting suspicious downloads")
+        suspicious_downloads = build_suspicious_downloads(http_rows, extracted_payloads)
 
-    print("[*] Detecting entropy-based exfil candidates")
-    entropy_exfil_candidates = detect_entropy_exfil_candidates(extracted_payloads)
+    if extracted_payloads:
+        print("[*] Detecting entropy-based exfil candidates")
+        entropy_exfil_candidates = detect_entropy_exfil_candidates(extracted_payloads)
 
-    print("[*] Detecting TLS SNI anomalies")
-    tls_sni_anomalies = detect_tls_sni_anomalies(tls_summary)
+    if tls_summary:
+        print("[*] Detecting TLS SNI anomalies")
+        tls_sni_anomalies = detect_tls_sni_anomalies(tls_summary)
 
     print("[*] Building alerts")
     alerts = build_alerts(
@@ -277,7 +288,7 @@ def main():
         "top_dns_queries": protocol_data["dns_queries"].most_common(args.top),
         "top_http_hosts": protocol_data["http_hosts"].most_common(args.top),
         "top_http_user_agents": protocol_data["http_user_agents"].most_common(args.top),
-        "tcp_stream_count": len(get_unique_tcp_stream_ids(tcp_stream_rows)) if tcp_stream_rows else 0,
+        "tcp_stream_count": len(stream_ids),
         "http_body_preview_count": len(http_body_previews),
         "tls_metadata_count": len(tls_summary),
         "file_indicators_count": len(file_indicators),
