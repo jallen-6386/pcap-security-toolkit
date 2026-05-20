@@ -328,9 +328,20 @@ def carve_files_from_raw_streams(case_output_dir: Path, streams_dir: Path, tcp_s
             }
 
     signatures = [
-        (b"%PDF-", "PDF", ".pdf"),
-        (b"PK\x03\x04", "ZIP", ".zip"),
-        (b"MZ", "PE_EXE", ".exe"),
+        (b"%PDF-",              "PDF",    ".pdf"),
+        (b"PK\x03\x04",        "ZIP",    ".zip"),
+        (b"MZ",                 "PE_EXE", ".exe"),
+        (b"\x7fELF",            "ELF",    ".elf"),
+        (b"\x89PNG\r\n\x1a\n", "PNG",    ".png"),
+        (b"\xff\xd8\xff",       "JPEG",   ".jpg"),
+        (b"GIF87a",             "GIF",    ".gif"),
+        (b"GIF89a",             "GIF",    ".gif"),
+        (b"Rar!\x1a\x07",       "RAR",    ".rar"),
+        (b"7z\xbc\xaf\x27\x1c","SEVEN_Z",".7z"),
+        (b"\x1f\x8b",           "GZIP",   ".gz"),
+        (b"BZh",                "BZIP2",  ".bz2"),
+        (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "OLE2", ".doc"),
+        (b"SQLite format 3\x00","SQLITE", ".sqlite"),
     ]
 
     results = []

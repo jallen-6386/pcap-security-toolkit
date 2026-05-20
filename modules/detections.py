@@ -1,9 +1,15 @@
+import math
 import re
 import statistics
+from collections import defaultdict
 from pathlib import Path
 
 from modules.utils import human_readable_bytes, is_private_ip
 
+
+# ---------------------------------------------------------------------------
+# Shared constants
+# ---------------------------------------------------------------------------
 
 SUSPICIOUS_DOWNLOAD_EXTENSIONS = {
     ".exe", ".dll", ".msi", ".zip", ".iso", ".js", ".jse",
@@ -38,6 +44,91 @@ SUSPICIOUS_SNI_SUFFIXES = {
     ".link", ".work", ".shop", ".cam",
 }
 
+# Tool and scripted user-agent substrings (lowercase match)
+SUSPICIOUS_UA_STRINGS = [
+    "python-requests", "python-urllib", "python/",
+    "go-http-client", "go http",
+    "curl/", "wget/",
+    "libwww-perl", "lwp-trivial",
+    "nikto", "sqlmap", "nmap", "masscan", "zgrab", "zmap",
+    "nessus", "openvas", "acunetix", "burpsuite",
+    "metasploit", "msfconsole",
+    "powershell", "invoke-webrequest", "invoke-restmethod",
+    "certutil", "bitsadmin", "wfetch",
+    "java/", "okhttp/", "apache-httpclient",
+    "scrapy", "mechanize",
+]
+
+# Known malware-associated user-agent patterns (lowercase full-string match)
+KNOWN_MALWARE_UA_STRINGS = [
+    "mozilla/5.0 (compatible; msie 9.0; windows nt 6.1; trident/5.0)",  # Emotet
+    "mozilla/4.0 (compatible; msie 7.0; windows nt 5.1)",               # various RATs
+    "mozilla/5.0 (windows nt 6.1) applewebkit/537.36",                  # Trickbot variant
+]
+
+# ---------------------------------------------------------------------------
+# MITRE ATT&CK mapping
+# ---------------------------------------------------------------------------
+
+MITRE_MAP = {
+    "LARGE_PRIVATE_TO_EXTERNAL_TRANSFER": ("T1041",    "Exfiltration",          "Exfiltration Over C2 Channel"),
+    "FILE_NAME_INDICATOR_OBSERVED":       ("T1105",    "Command and Control",   "Ingress Tool Transfer"),
+    "HTTP_BODY_PRESENT":                  ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
+    "TLS_SNI_OBSERVED":                   ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
+    "BEACONING_CANDIDATE":                ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
+    "CREDENTIAL_INDICATOR":               ("T1552",    "Credential Access",     "Unsecured Credentials"),
+    "SUSPICIOUS_DOWNLOAD":                ("T1105",    "Command and Control",   "Ingress Tool Transfer"),
+    "ENTROPY_BASED_EXFIL_CANDIDATE":      ("T1048.003","Exfiltration",          "Exfiltration Over Unencrypted Non-C2 Protocol"),
+    "CREDENTIAL_POST_RECONSTRUCTED":      ("T1056.003","Collection",            "Input Capture: Web Portal Capture"),
+    "TLS_SNI_ANOMALY":                    ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
+    "DNS_TUNNELING_CANDIDATE":            ("T1071.004","Command and Control",   "Application Layer Protocol: DNS"),
+    "SUSPICIOUS_USER_AGENT":              ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
+    "PROTOCOL_ANOMALY":                   ("T1571",    "Command and Control",   "Non-Standard Port"),
+    "LATERAL_MOVEMENT_CANDIDATE":         ("T1021.002","Lateral Movement",      "Remote Services: SMB/Windows Admin Shares"),
+    "INTERNAL_SCAN_CANDIDATE":            ("T1046",    "Discovery",             "Network Service Discovery"),
+    "MALICIOUS_JA3":                      ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
+    "KERBEROS_ANOMALY":                   ("T1558",    "Credential Access",     "Steal or Forge Kerberos Tickets"),
+    "EMAIL_ACTIVITY":                     ("T1048",    "Exfiltration",          "Exfiltration Over Alternative Protocol"),
+}
+
+ALERT_SEVERITY_MAP = {
+    "CREDENTIAL_POST_RECONSTRUCTED":      "CRITICAL",
+    "MALICIOUS_JA3":                      "CRITICAL",
+    "DNS_TUNNELING_CANDIDATE":            "HIGH",
+    "CREDENTIAL_INDICATOR":               "HIGH",
+    "ENTROPY_BASED_EXFIL_CANDIDATE":      "HIGH",
+    "LARGE_PRIVATE_TO_EXTERNAL_TRANSFER": "HIGH",
+    "SUSPICIOUS_DOWNLOAD":                "HIGH",
+    "LATERAL_MOVEMENT_CANDIDATE":         "HIGH",
+    "INTERNAL_SCAN_CANDIDATE":            "HIGH",
+    "BEACONING_CANDIDATE":                "HIGH",
+    "KERBEROS_ANOMALY":                   "HIGH",
+    "TLS_SNI_ANOMALY":                    "MEDIUM",
+    "SUSPICIOUS_USER_AGENT":              "MEDIUM",
+    "PROTOCOL_ANOMALY":                   "MEDIUM",
+    "HTTP_BODY_PRESENT":                  "MEDIUM",
+    "EMAIL_ACTIVITY":                     "LOW",
+    "FILE_NAME_INDICATOR_OBSERVED":       "LOW",
+    "TLS_SNI_OBSERVED":                   "INFO",
+}
+
+_SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+
+def _enrich_alert(alert: dict) -> dict:
+    alert_type = alert.get("alert_type", "")
+    severity = ALERT_SEVERITY_MAP.get(alert_type, "INFO")
+    technique_id, tactic, technique_name = MITRE_MAP.get(alert_type, ("", "", ""))
+    alert["severity"] = severity
+    alert["mitre_technique_id"] = technique_id
+    alert["mitre_tactic"] = tactic
+    alert["mitre_technique_name"] = technique_name
+    return alert
+
+
+# ---------------------------------------------------------------------------
+# Credential helpers
+# ---------------------------------------------------------------------------
 
 def classify_credential_severity(score: int) -> str:
     if score >= 90:
@@ -65,6 +156,10 @@ def build_credential_score(label: str, context: str) -> tuple[int, str]:
     base_score = min(base_score, 100)
     return base_score, classify_credential_severity(base_score)
 
+
+# ---------------------------------------------------------------------------
+# Existing detection functions
+# ---------------------------------------------------------------------------
 
 def find_credential_indicators(http_body_previews: list[dict], extracted_payloads: list[dict]) -> list[dict]:
     findings = []
@@ -304,6 +399,236 @@ def detect_tls_sni_anomalies(tls_summary: list[dict]) -> list[dict]:
     return findings
 
 
+# ---------------------------------------------------------------------------
+# New detection functions
+# ---------------------------------------------------------------------------
+
+def _label_shannon_entropy(label: str) -> float:
+    if not label:
+        return 0.0
+    freq = {}
+    for ch in label:
+        freq[ch] = freq.get(ch, 0) + 1
+    n = len(label)
+    return -sum((c / n) * math.log2(c / n) for c in freq.values())
+
+
+def detect_dns_tunneling(dns_rows: list[dict]) -> list[dict]:
+    """Detect potential DNS tunneling via entropy, FQDN length, query volume, and record type."""
+    findings = []
+    domain_query_map: dict[str, list[dict]] = defaultdict(list)
+    seen_keys: set[tuple] = set()
+
+    for row in dns_rows:
+        qname = (row.get("dns.qry.name", "") or "").strip().lower().rstrip(".")
+        qtype = (row.get("dns.qry.type", "") or "").strip()
+        src_ip = row.get("ip.src", "")
+        dst_ip = row.get("ip.dst", "")
+        timestamp = row.get("frame.time", "")
+
+        if not qname:
+            continue
+
+        parts = qname.split(".")
+        registered = ".".join(parts[-2:]) if len(parts) >= 2 else qname
+        domain_query_map[registered].append({
+            "qname": qname,
+            "qtype": qtype,
+            "src_ip": src_ip,
+            "dst_ip": dst_ip,
+            "frame_time": timestamp,
+        })
+
+        reasons = []
+
+        # High-entropy subdomain labels
+        if len(parts) >= 3:
+            for label in parts[:-2]:
+                if len(label) >= 20:
+                    ent = _label_shannon_entropy(label)
+                    if ent >= 3.5:
+                        reasons.append(
+                            f"High-entropy subdomain '{label[:30]}' (entropy={ent:.2f})"
+                        )
+
+        # Unusually long FQDN
+        if len(qname) > 52:
+            reasons.append(f"Long FQDN ({len(qname)} chars)")
+
+        # TXT or NULL record query
+        if qtype in {"16", "10"}:
+            type_label = "TXT" if qtype == "16" else "NULL"
+            reasons.append(
+                f"{type_label} record query — uncommon in normal traffic, used by tunneling tools"
+            )
+
+        if reasons:
+            key = (src_ip, qname, ",".join(reasons)[:60])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                findings.append({
+                    "timestamp": timestamp,
+                    "src_ip": src_ip,
+                    "dst_ip": dst_ip,
+                    "qname": qname,
+                    "qtype": qtype,
+                    "reason": " | ".join(reasons),
+                })
+
+    # High query volume to a single registered domain (> 50 queries)
+    for registered_domain, entries in domain_query_map.items():
+        if len(entries) > 50:
+            src_ips = sorted({e["src_ip"] for e in entries})
+            key = ("volume", registered_domain)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                findings.append({
+                    "timestamp": entries[0]["frame_time"],
+                    "src_ip": ", ".join(src_ips[:5]),
+                    "dst_ip": entries[0]["dst_ip"],
+                    "qname": registered_domain,
+                    "qtype": "multiple",
+                    "reason": (
+                        f"High query volume: {len(entries)} queries to '{registered_domain}' "
+                        f"from {len(src_ips)} source(s)"
+                    ),
+                })
+
+    return findings
+
+
+def detect_suspicious_user_agents(http_rows: list[dict]) -> list[dict]:
+    """Detect empty, tool-based, or malware-associated HTTP User-Agent values."""
+    findings = []
+    ua_per_src: dict[str, set] = defaultdict(set)
+    seen: set[tuple] = set()
+
+    for row in http_rows:
+        ua = (row.get("http.user_agent", "") or "").strip()
+        src_ip = row.get("ip.src", "")
+        if ua and src_ip:
+            ua_per_src[src_ip].add(ua)
+
+    for row in http_rows:
+        ua = (row.get("http.user_agent", "") or "").strip()
+        src_ip = row.get("ip.src", "")
+        dst_ip = row.get("ip.dst", "")
+        host = row.get("http.host", "")
+
+        reasons = []
+
+        if not ua:
+            reasons.append("Empty or missing User-Agent")
+        else:
+            ua_lower = ua.lower()
+            for sus in SUSPICIOUS_UA_STRINGS:
+                if sus in ua_lower:
+                    reasons.append(f"Tool/scripted User-Agent contains '{sus}'")
+                    break
+            for mal in KNOWN_MALWARE_UA_STRINGS:
+                if mal in ua_lower:
+                    reasons.append("Known malware-associated User-Agent pattern")
+                    break
+
+        if reasons:
+            key = (src_ip, ua[:80])
+            if key not in seen:
+                seen.add(key)
+                findings.append({
+                    "timestamp": row.get("frame.time", ""),
+                    "src_ip": src_ip,
+                    "dst_ip": dst_ip,
+                    "tcp_stream": row.get("tcp.stream", ""),
+                    "host": host,
+                    "user_agent": ua[:300],
+                    "reason": " | ".join(reasons),
+                })
+
+    # Flag single source IPs using 4+ distinct UAs
+    for src_ip, uas in ua_per_src.items():
+        if len(uas) >= 4:
+            key = (src_ip, "multi_ua")
+            if key not in seen:
+                seen.add(key)
+                findings.append({
+                    "timestamp": "",
+                    "src_ip": src_ip,
+                    "dst_ip": "",
+                    "tcp_stream": "",
+                    "host": "",
+                    "user_agent": "; ".join(list(uas)[:4]),
+                    "reason": f"Source IP using {len(uas)} distinct User-Agent strings",
+                })
+
+    return findings
+
+
+def detect_lateral_movement(flow_bytes: dict, flow_times: dict) -> list[dict]:
+    """Detect internal SMB spread and TCP port-scan patterns consistent with lateral movement."""
+    findings = []
+
+    smb_targets: dict[str, set] = defaultdict(set)
+    internal_tcp_targets: dict[str, set] = defaultdict(set)
+
+    for flow_key, byte_count in flow_bytes.items():
+        src, dst, sport, dport, proto = flow_key
+
+        if not (is_private_ip(src) and is_private_ip(dst)):
+            continue
+
+        if proto != "TCP":
+            continue
+
+        if dport == 445:
+            smb_targets[src].add(dst)
+
+        # Small flows to many targets = likely scanning
+        if byte_count < 500:
+            internal_tcp_targets[src].add((dst, dport))
+
+    # SMB spread: one host → 3+ internal targets on port 445
+    for src_ip, dst_ips in smb_targets.items():
+        if len(dst_ips) >= 3:
+            findings.append({
+                "src_ip": src_ip,
+                "dst_ips": ", ".join(sorted(dst_ips)),
+                "dst_count": len(dst_ips),
+                "protocol": "SMB",
+                "dport": 445,
+                "indicator": "LATERAL_MOVEMENT_CANDIDATE",
+                "reason": (
+                    f"Host connected to {len(dst_ips)} internal targets via SMB (port 445) "
+                    "— possible lateral movement or ransomware propagation"
+                ),
+            })
+
+    # Internal port scan: many IPs or many ports from one host
+    for src_ip, targets in internal_tcp_targets.items():
+        unique_dst_ips = {t[0] for t in targets}
+        unique_ports = {t[1] for t in targets}
+
+        if len(unique_dst_ips) >= 10 or (len(unique_ports) >= 10 and len(unique_dst_ips) >= 3):
+            findings.append({
+                "src_ip": src_ip,
+                "dst_ips": ", ".join(sorted(unique_dst_ips)[:10]),
+                "dst_count": len(unique_dst_ips),
+                "protocol": "TCP",
+                "dport": f"{len(unique_ports)} unique ports",
+                "indicator": "INTERNAL_SCAN_CANDIDATE",
+                "reason": (
+                    f"Small TCP connections to {len(unique_dst_ips)} internal IPs "
+                    f"across {len(unique_ports)} ports — possible network reconnaissance"
+                ),
+            })
+
+    findings.sort(key=lambda x: x["dst_count"], reverse=True)
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Alert aggregation
+# ---------------------------------------------------------------------------
+
 def build_alerts(
     flow_bytes,
     file_indicators,
@@ -315,6 +640,12 @@ def build_alerts(
     entropy_exfil_candidates=None,
     credential_posts=None,
     tls_sni_anomalies=None,
+    dns_tunneling_candidates=None,
+    suspicious_user_agents=None,
+    lateral_movement_candidates=None,
+    protocol_anomalies=None,
+    malicious_ja3_findings=None,
+    kerberos_rows=None,
 ):
     alerts = []
     http_body_previews = http_body_previews or []
@@ -325,11 +656,17 @@ def build_alerts(
     entropy_exfil_candidates = entropy_exfil_candidates or []
     credential_posts = credential_posts or []
     tls_sni_anomalies = tls_sni_anomalies or []
+    dns_tunneling_candidates = dns_tunneling_candidates or []
+    suspicious_user_agents = suspicious_user_agents or []
+    lateral_movement_candidates = lateral_movement_candidates or []
+    protocol_anomalies = protocol_anomalies or []
+    malicious_ja3_findings = malicious_ja3_findings or []
+    kerberos_rows = kerberos_rows or []
 
     for flow, byte_count in flow_bytes.items():
         src, dst, sport, dport, proto = flow
         if is_private_ip(src) and not is_private_ip(dst) and byte_count >= 1_000_000:
-            alerts.append({
+            alerts.append(_enrich_alert({
                 "alert_type": "LARGE_PRIVATE_TO_EXTERNAL_TRANSFER",
                 "src_ip": src,
                 "dst_ip": dst,
@@ -338,10 +675,10 @@ def build_alerts(
                 "dport": dport,
                 "bytes": byte_count,
                 "reason": "High-volume outbound flow from private IP to external IP",
-            })
+            }))
 
     for item in file_indicators:
-        alerts.append({
+        alerts.append(_enrich_alert({
             "alert_type": "FILE_NAME_INDICATOR_OBSERVED",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
@@ -349,12 +686,12 @@ def build_alerts(
             "tcp_stream": item.get("tcp_stream"),
             "filename": item.get("filename"),
             "reason": "Potential file transfer or filename reference observed",
-        })
+        }))
 
     for item in http_body_previews:
         method = (item.get("http_method") or "").upper()
         if method in {"POST", "PUT", "PATCH"} and item.get("body_preview"):
-            alerts.append({
+            alerts.append(_enrich_alert({
                 "alert_type": "HTTP_BODY_PRESENT",
                 "src_ip": item.get("src_ip"),
                 "dst_ip": item.get("dst_ip"),
@@ -363,11 +700,11 @@ def build_alerts(
                 "host": item.get("host"),
                 "uri": item.get("uri"),
                 "reason": "HTTP request body reconstructed or previewed",
-            })
+            }))
 
     for item in tls_summary:
         if item.get("sni"):
-            alerts.append({
+            alerts.append(_enrich_alert({
                 "alert_type": "TLS_SNI_OBSERVED",
                 "src_ip": item.get("src_ip"),
                 "dst_ip": item.get("dst_ip"),
@@ -375,10 +712,10 @@ def build_alerts(
                 "tcp_stream": item.get("tcp_stream"),
                 "host": item.get("sni"),
                 "reason": "TLS metadata observed; content remains encrypted without TLS secrets",
-            })
+            }))
 
     for item in beaconing_candidates:
-        alerts.append({
+        alerts.append(_enrich_alert({
             "alert_type": "BEACONING_CANDIDATE",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
@@ -386,56 +723,125 @@ def build_alerts(
             "sport": item.get("sport"),
             "dport": item.get("dport"),
             "reason": f"Regular timing detected with low jitter ({item.get('jitter_pct')}%)",
-        })
+        }))
 
     for item in credential_findings:
-        alerts.append({
+        alerts.append(_enrich_alert({
             "alert_type": "CREDENTIAL_INDICATOR",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
             "protocol": "HTTP",
             "tcp_stream": item.get("tcp_stream"),
-            "reason": f"{item.get('severity')} severity credential/token-like content detected: {item.get('indicator_type')}",
-        })
+            "reason": (
+                f"{item.get('severity')} severity credential indicator detected: "
+                f"{item.get('indicator_type')}"
+            ),
+        }))
 
     for item in suspicious_downloads:
-        alerts.append({
+        alerts.append(_enrich_alert({
             "alert_type": "SUSPICIOUS_DOWNLOAD",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
             "protocol": "HTTP",
             "tcp_stream": item.get("tcp_stream"),
             "reason": item.get("reason"),
-        })
+        }))
 
     for item in entropy_exfil_candidates:
-        alerts.append({
+        alerts.append(_enrich_alert({
             "alert_type": "ENTROPY_BASED_EXFIL_CANDIDATE",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
             "protocol": "HTTP",
             "tcp_stream": item.get("tcp_stream"),
             "reason": item.get("reason"),
-        })
+        }))
 
     for item in credential_posts:
-        alerts.append({
+        alerts.append(_enrich_alert({
             "alert_type": "CREDENTIAL_POST_RECONSTRUCTED",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
             "protocol": "HTTP",
             "tcp_stream": item.get("tcp_stream"),
             "reason": "POST body contains likely credential or token material",
-        })
+        }))
 
     for item in tls_sni_anomalies:
-        alerts.append({
+        alerts.append(_enrich_alert({
             "alert_type": "TLS_SNI_ANOMALY",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
             "protocol": "TLS",
             "tcp_stream": item.get("tcp_stream"),
             "reason": item.get("reason"),
-        })
+        }))
 
+    for item in dns_tunneling_candidates:
+        alerts.append(_enrich_alert({
+            "alert_type": "DNS_TUNNELING_CANDIDATE",
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "DNS",
+            "tcp_stream": "",
+            "host": item.get("qname"),
+            "reason": item.get("reason"),
+        }))
+
+    for item in suspicious_user_agents:
+        alerts.append(_enrich_alert({
+            "alert_type": "SUSPICIOUS_USER_AGENT",
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "HTTP",
+            "tcp_stream": item.get("tcp_stream"),
+            "reason": item.get("reason"),
+        }))
+
+    for item in lateral_movement_candidates:
+        indicator = item.get("indicator", "LATERAL_MOVEMENT_CANDIDATE")
+        alerts.append(_enrich_alert({
+            "alert_type": indicator,
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ips", ""),
+            "protocol": item.get("protocol"),
+            "dport": item.get("dport"),
+            "reason": item.get("reason"),
+        }))
+
+    for item in protocol_anomalies:
+        alerts.append(_enrich_alert({
+            "alert_type": "PROTOCOL_ANOMALY",
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": item.get("protocol"),
+            "tcp_stream": item.get("tcp_stream"),
+            "dport": item.get("dport"),
+            "reason": item.get("reason"),
+        }))
+
+    for item in malicious_ja3_findings:
+        alerts.append(_enrich_alert({
+            "alert_type": "MALICIOUS_JA3",
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "TLS",
+            "tcp_stream": item.get("tcp_stream"),
+            "reason": item.get("reason"),
+        }))
+
+    for item in kerberos_rows:
+        error_code = (item.get("kerberos.error_code", "") or "").strip()
+        if error_code:
+            alerts.append(_enrich_alert({
+                "alert_type": "KERBEROS_ANOMALY",
+                "src_ip": item.get("ip.src", ""),
+                "dst_ip": item.get("ip.dst", ""),
+                "protocol": "Kerberos",
+                "tcp_stream": item.get("tcp.stream", ""),
+                "reason": f"Kerberos error {error_code} for user {item.get('kerberos.CNameString', '')}",
+            }))
+
+    alerts.sort(key=lambda a: _SEVERITY_ORDER.get(a.get("severity", "INFO"), 4))
     return alerts

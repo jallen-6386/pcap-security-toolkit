@@ -2,6 +2,12 @@ from collections import Counter, defaultdict
 
 from scapy.layers.inet import IP, TCP, UDP
 
+try:
+    from scapy.layers.inet6 import IPv6
+    _HAS_IPV6 = True
+except ImportError:
+    _HAS_IPV6 = False
+
 from modules.utils import human_readable_bytes
 
 
@@ -21,14 +27,20 @@ def analyze_flows(packets):
         pkt_len = len(pkt)
         total_bytes += pkt_len
 
-        if IP not in pkt:
-            continue
-
-        src = pkt[IP].src
-        dst = pkt[IP].dst
+        src = None
+        dst = None
         sport = None
         dport = None
         proto = "OTHER"
+
+        if IP in pkt:
+            src = pkt[IP].src
+            dst = pkt[IP].dst
+        elif _HAS_IPV6 and IPv6 in pkt:
+            src = pkt[IPv6].src
+            dst = pkt[IPv6].dst
+        else:
+            continue
 
         if TCP in pkt:
             proto = "TCP"
