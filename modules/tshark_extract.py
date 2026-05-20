@@ -57,7 +57,44 @@ def extract_http_fields(pcap_path):
         "http.content_length",
         "http.file_data",
     ]
-    return run_tshark_fields(pcap_path, fields, display_filter="http")
+    return run_tshark_fields(pcap_path, fields, display_filter="http.request")
+
+
+def extract_http_response_fields(pcap_path):
+    """Extract HTTP response metadata to correlate results with requests."""
+    fields = [
+        "frame.number",
+        "frame.time",
+        "ip.src",
+        "tcp.srcport",
+        "ip.dst",
+        "tcp.dstport",
+        "tcp.stream",
+        "http.response.code",
+        "http.response.phrase",
+        "http.content_type",
+        "http.content_length",
+        "http.server",
+        "http.location",
+    ]
+    return run_tshark_fields(pcap_path, fields, display_filter="http.response")
+
+
+def extract_dns_fields(pcap_path):
+    """Extract DNS queries and answers for tunneling detection and passive DNS correlation."""
+    fields = [
+        "frame.number",
+        "frame.time",
+        "ip.src",
+        "ip.dst",
+        "dns.qry.name",
+        "dns.qry.type",
+        "dns.a",
+        "dns.aaaa",
+        "dns.cname",
+        "dns.resp.ttl",
+    ]
+    return run_tshark_fields(pcap_path, fields, display_filter="dns")
 
 
 def extract_smb_fields(pcap_path):
@@ -82,3 +119,41 @@ def extract_ftp_fields(pcap_path):
         "ftp.request.arg",
     ]
     return run_tshark_fields(pcap_path, fields, display_filter="ftp")
+
+
+def extract_smtp_fields(pcap_path):
+    """Extract SMTP/IMAP/POP3 activity for email-based exfiltration and credential detection."""
+    fields = [
+        "frame.time",
+        "ip.src",
+        "tcp.srcport",
+        "ip.dst",
+        "tcp.dstport",
+        "tcp.stream",
+        "smtp.req.command",
+        "smtp.req.parameter",
+        "smtp.auth.username",
+        "imap.request",
+        "pop.request",
+    ]
+    return run_tshark_fields(
+        pcap_path, fields, display_filter="smtp or imap or pop"
+    )
+
+
+def extract_kerberos_fields(pcap_path):
+    """Extract Kerberos authentication events for credential attack detection."""
+    fields = [
+        "frame.time",
+        "ip.src",
+        "tcp.srcport",
+        "ip.dst",
+        "tcp.dstport",
+        "tcp.stream",
+        "kerberos.msg_type",
+        "kerberos.CNameString",
+        "kerberos.realm",
+        "kerberos.error_code",
+        "kerberos.etype",
+    ]
+    return run_tshark_fields(pcap_path, fields, display_filter="kerberos")

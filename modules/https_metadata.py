@@ -1,8 +1,4 @@
-import csv
-import io
-import subprocess
-
-from modules.dependencies import find_tshark
+from modules.tshark_extract import run_tshark_fields
 
 
 # Known-malicious JA3 fingerprints. Values are (label, source).
@@ -17,29 +13,6 @@ KNOWN_MALICIOUS_JA3 = {
     "bc6c386f480f78b0b6e1af699893bdee": ("njRAT", "abuse.ch"),
     "839bbe3ed07fed922ded5aaf714d6842": ("Emotet", "abuse.ch"),
 }
-
-
-def run_tshark_fields(pcap_path, fields, display_filter=None):
-    tshark_path = find_tshark()
-    if not tshark_path:
-        return [], "TShark not found"
-
-    cmd = [tshark_path, "-r", str(pcap_path), "-T", "fields"]
-
-    if display_filter:
-        cmd.extend(["-Y", display_filter])
-
-    for field in fields:
-        cmd.extend(["-e", field])
-
-    cmd.extend(["-E", "header=y", "-E", "separator=,", "-E", "quote=d"])
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        return [], result.stderr.strip()
-
-    reader = csv.DictReader(io.StringIO(result.stdout))
-    return list(reader), None
 
 
 def extract_tls_metadata(pcap_path):

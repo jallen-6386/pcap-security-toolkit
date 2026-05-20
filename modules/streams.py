@@ -1,31 +1,7 @@
-import csv
-import io
 import subprocess
 
 from modules.dependencies import find_tshark
-
-
-def run_tshark_fields(pcap_path, fields, display_filter=None):
-    tshark_path = find_tshark()
-    if not tshark_path:
-        return [], "TShark not found"
-
-    cmd = [tshark_path, "-r", str(pcap_path), "-T", "fields"]
-
-    if display_filter:
-        cmd.extend(["-Y", display_filter])
-
-    for field in fields:
-        cmd.extend(["-e", field])
-
-    cmd.extend(["-E", "header=y", "-E", "separator=,", "-E", "quote=d"])
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        return [], result.stderr.strip()
-
-    reader = csv.DictReader(io.StringIO(result.stdout))
-    return list(reader), None
+from modules.tshark_extract import run_tshark_fields
 
 
 def extract_tcp_stream_index(pcap_path):

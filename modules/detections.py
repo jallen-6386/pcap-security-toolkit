@@ -89,6 +89,7 @@ MITRE_MAP = {
     "MALICIOUS_JA3":                      ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
     "KERBEROS_ANOMALY":                   ("T1558",    "Credential Access",     "Steal or Forge Kerberos Tickets"),
     "EMAIL_ACTIVITY":                     ("T1048",    "Exfiltration",          "Exfiltration Over Alternative Protocol"),
+    "HTTP_RESPONSE_ANOMALY":              ("T1105",    "Command and Control",   "Ingress Tool Transfer"),
 }
 
 ALERT_SEVERITY_MAP = {
@@ -108,6 +109,7 @@ ALERT_SEVERITY_MAP = {
     "PROTOCOL_ANOMALY":                   "MEDIUM",
     "HTTP_BODY_PRESENT":                  "MEDIUM",
     "EMAIL_ACTIVITY":                     "LOW",
+    "HTTP_RESPONSE_ANOMALY":              "MEDIUM",
     "FILE_NAME_INDICATOR_OBSERVED":       "LOW",
     "TLS_SNI_OBSERVED":                   "INFO",
 }
@@ -626,6 +628,61 @@ def detect_lateral_movement(flow_bytes: dict, flow_times: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# HTTP response anomaly detection
+# ---------------------------------------------------------------------------
+
+def detect_http_response_anomalies(http_response_rows: list[dict]) -> list[dict]:
+    """Flag scanning indicators and confirmed-successful suspicious transfers in HTTP responses."""
+    findings = []
+    not_found_per_src: dict[str, int] = defaultdict(int)
+
+    for row in http_response_rows:
+        code = (row.get("http.response.code", "") or "").strip()
+        content_type = (row.get("http.content_type", "") or "").lower()
+        src_ip = row.get("ip.src", "")
+
+        if code == "404":
+            not_found_per_src[src_ip] += 1
+
+    # Many 404s from a single source = path enumeration / scanning
+    for src_ip, count in not_found_per_src.items():
+        if count >= 10:
+            findings.append({
+                "src_ip": src_ip,
+                "dst_ip": "",
+                "tcp_stream": "",
+                "response_code": "404",
+                "content_type": "",
+                "reason": f"{count} HTTP 404 responses involving {src_ip} — possible path enumeration or scanning",
+            })
+
+    # 200 OK for suspicious content types = confirmed delivery
+    suspicious_delivered = {
+        "application/x-dosexec", "application/x-msdownload",
+        "application/x-ms-installer", "application/vnd.ms-office",
+    }
+    seen_streams: set[str] = set()
+    for row in http_response_rows:
+        code = (row.get("http.response.code", "") or "").strip()
+        content_type = (row.get("http.content_type", "") or "").lower().split(";")[0].strip()
+        tcp_stream = (row.get("tcp.stream", "") or "").strip()
+
+        if code == "200" and content_type in suspicious_delivered:
+            if tcp_stream not in seen_streams:
+                seen_streams.add(tcp_stream)
+                findings.append({
+                    "src_ip": row.get("ip.src", ""),
+                    "dst_ip": row.get("ip.dst", ""),
+                    "tcp_stream": tcp_stream,
+                    "response_code": code,
+                    "content_type": content_type,
+                    "reason": f"HTTP 200 OK delivering suspicious content-type '{content_type}' — transfer confirmed",
+                })
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Alert aggregation
 # ---------------------------------------------------------------------------
 
@@ -646,6 +703,7 @@ def build_alerts(
     protocol_anomalies=None,
     malicious_ja3_findings=None,
     kerberos_rows=None,
+    http_response_anomalies=None,
 ):
     alerts = []
     http_body_previews = http_body_previews or []
@@ -662,6 +720,7 @@ def build_alerts(
     protocol_anomalies = protocol_anomalies or []
     malicious_ja3_findings = malicious_ja3_findings or []
     kerberos_rows = kerberos_rows or []
+    http_response_anomalies = http_response_anomalies or []
 
     for flow, byte_count in flow_bytes.items():
         src, dst, sport, dport, proto = flow
@@ -842,6 +901,16 @@ def build_alerts(
                 "tcp_stream": item.get("tcp.stream", ""),
                 "reason": f"Kerberos error {error_code} for user {item.get('kerberos.CNameString', '')}",
             }))
+
+    for item in http_response_anomalies:
+        alerts.append(_enrich_alert({
+            "alert_type": "HTTP_RESPONSE_ANOMALY",
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "HTTP",
+            "tcp_stream": item.get("tcp_stream"),
+            "reason": item.get("reason"),
+        }))
 
     alerts.sort(key=lambda a: _SEVERITY_ORDER.get(a.get("severity", "INFO"), 4))
     return alerts
