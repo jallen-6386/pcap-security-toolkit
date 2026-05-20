@@ -2,7 +2,7 @@
 
 """
 PCAP Security Toolkit
-Version: 1.5.0
+Version: 2.0.0
 """
 
 import argparse
@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 try:
-    from scapy.utils import rdpcap
+    from scapy.utils import PcapReader
 except ImportError:
     print("[!] Missing dependency: scapy")
     print("[!] Please run bootstrap or install requirements:")
@@ -23,10 +23,15 @@ from config import OUTPUT_DIR
 from modules.cases import get_case_output_dir
 from modules.dependencies import has_tshark
 from modules.detections import (
+    _SEVERITY_ORDER,
     build_alerts,
     build_suspicious_downloads,
     detect_beaconing,
+    detect_dns_tunneling,
     detect_entropy_exfil_candidates,
+    detect_http_response_anomalies,
+    detect_lateral_movement,
+    detect_suspicious_user_agents,
     detect_tls_sni_anomalies,
     find_credential_indicators,
     reconstruct_credential_posts,
@@ -35,49 +40,81 @@ from modules.dns_http_tls import analyze_dns_http_tls
 from modules.exporters import write_csv, write_json
 from modules.files import build_http_body_previews, extract_file_indicators
 from modules.flows import analyze_flows
-from modules.https_metadata import extract_tls_metadata, summarize_tls_rows
+from modules.geoip import GeoIPEnricher, enrich_ips
+from modules.html_report import generate_html_report
+from modules.https_metadata import detect_malicious_ja3, extract_tls_metadata, summarize_tls_rows
+from modules.iocs import extract_iocs
 from modules.payloads import (
     carve_files_from_raw_streams,
     save_extracted_payloads,
     write_extracted_payload_index,
 )
+from modules.protocol_anomalies import detect_protocol_anomalies
 from modules.streams import (
     export_follow_stream,
     extract_tcp_stream_index,
     get_unique_tcp_stream_ids,
 )
 from modules.tshark_extract import (
+    extract_dns_fields,
     extract_ftp_fields,
     extract_http_fields,
+    extract_http_response_fields,
+    extract_kerberos_fields,
+    extract_smtp_fields,
     extract_smb_fields,
 )
+from modules.utils import is_private_ip
 
 
-def print_report_summary(report: dict) -> None:
+# ---------------------------------------------------------------------------
+# Terminal output helpers
+# ---------------------------------------------------------------------------
+
+def _severity_label(severity: str) -> str:
+    labels = {
+        "CRITICAL": "[CRITICAL]",
+        "HIGH":     "[HIGH]    ",
+        "MEDIUM":   "[MEDIUM]  ",
+        "LOW":      "[LOW]     ",
+        "INFO":     "[INFO]    ",
+    }
+    return labels.get(severity, "[INFO]    ")
+
+
+def print_report_summary(report: dict, alerts: list[dict], severity_filter: str) -> None:
     summary = report.get("summary", {})
+    filter_order = _SEVERITY_ORDER.get(severity_filter, 4)
 
     print("\n" + "=" * 70)
     print("PCAP SECURITY TOOLKIT REPORT")
     print("=" * 70)
-    print(f"Total Packets: {summary.get('total_packets', 0)}")
+    print(f"Total Packets:              {summary.get('total_packets', 0)}")
     print(
-        f"Total Bytes: {summary.get('total_bytes', 0)} "
+        f"Total Bytes:                {summary.get('total_bytes', 0)} "
         f"({summary.get('total_size_human', 'N/A')})"
     )
-    print(f"Unique IPs: {summary.get('unique_ips', 0)}")
-    print(f"TCP Streams: {report.get('tcp_stream_count', 0)}")
-    print(f"HTTP Body Previews: {report.get('http_body_preview_count', 0)}")
-    print(f"TLS Metadata Rows: {report.get('tls_metadata_count', 0)}")
-    print(f"File Indicators: {report.get('file_indicators_count', 0)}")
-    print(f"Extracted Payloads: {report.get('extracted_payload_count', 0)}")
-    print(f"Credential Findings: {report.get('credential_finding_count', 0)}")
-    print(f"Credential POSTs: {report.get('credential_post_count', 0)}")
-    print(f"Suspicious Downloads: {report.get('suspicious_download_count', 0)}")
-    print(f"Entropy Exfil Candidates: {report.get('entropy_exfil_candidate_count', 0)}")
-    print(f"Beaconing Candidates: {report.get('beaconing_candidate_count', 0)}")
-    print(f"TLS SNI Anomalies: {report.get('tls_sni_anomaly_count', 0)}")
-    print(f"Carved Files: {report.get('carved_file_count', 0)}")
-    print(f"Alerts: {report.get('alerts_count', 0)}")
+    print(f"Unique IPs:                 {summary.get('unique_ips', 0)}")
+    print(f"TCP Streams:                {report.get('tcp_stream_count', 0)}")
+    print(f"HTTP Body Previews:         {report.get('http_body_preview_count', 0)}")
+    print(f"TLS Metadata Rows:          {report.get('tls_metadata_count', 0)}")
+    print(f"File Indicators:            {report.get('file_indicators_count', 0)}")
+    print(f"Extracted Payloads:         {report.get('extracted_payload_count', 0)}")
+    print(f"Credential Findings:        {report.get('credential_finding_count', 0)}")
+    print(f"Credential POSTs:           {report.get('credential_post_count', 0)}")
+    print(f"Suspicious Downloads:       {report.get('suspicious_download_count', 0)}")
+    print(f"Entropy Exfil Candidates:   {report.get('entropy_exfil_candidate_count', 0)}")
+    print(f"Beaconing Candidates:       {report.get('beaconing_candidate_count', 0)}")
+    print(f"TLS SNI Anomalies:          {report.get('tls_sni_anomaly_count', 0)}")
+    print(f"DNS Tunneling Candidates:   {report.get('dns_tunneling_count', 0)}")
+    print(f"Suspicious User Agents:     {report.get('suspicious_ua_count', 0)}")
+    print(f"Lateral Movement Hits:      {report.get('lateral_movement_count', 0)}")
+    print(f"Protocol Anomalies:         {report.get('protocol_anomaly_count', 0)}")
+    print(f"Malicious JA3 Hits:         {report.get('malicious_ja3_count', 0)}")
+    print(f"HTTP Response Anomalies:    {report.get('http_response_anomaly_count', 0)}")
+    print(f"Carved Files:               {report.get('carved_file_count', 0)}")
+    print(f"IOCs Extracted:             {report.get('ioc_count', 0)}")
+    print(f"Alerts:                     {report.get('alerts_count', 0)}")
 
     print("\nTop Protocols:")
     for proto, count in report.get("top_protocols", []):
@@ -106,8 +143,185 @@ def print_report_summary(report: dict) -> None:
         for ua, count in report.get("top_http_user_agents", []):
             print(f"  {ua}: {count}")
 
+    # Top critical/high alerts
+    visible = [
+        a for a in alerts
+        if _SEVERITY_ORDER.get(a.get("severity", "INFO"), 4) <= filter_order
+    ]
+    if visible:
+        print(f"\n{'=' * 70}")
+        print(f"TOP ALERTS (filter: {severity_filter} and above — {len(visible)} shown)")
+        print("=" * 70)
+        for alert in visible[:15]:
+            sev = alert.get("severity", "INFO")
+            label = _severity_label(sev)
+            atype = alert.get("alert_type", "")
+            src = alert.get("src_ip", "")
+            dst = alert.get("dst_ip", "")
+            reason = alert.get("reason", "")
+            technique = alert.get("mitre_technique_id", "")
+            print(f"{label} {atype}")
+            if src or dst:
+                print(f"           {src} -> {dst}")
+            if technique:
+                print(f"           MITRE: {technique} — {alert.get('mitre_tactic', '')}")
+            print(f"           {reason}")
+            print()
+        if len(visible) > 15:
+            print(f"  ... and {len(visible) - 15} more. See alerts.csv for full list.")
+
     print(f"\nCase Output Directory: {report.get('case_output_dir', 'N/A')}")
 
+
+# ---------------------------------------------------------------------------
+# Timeline builder
+# ---------------------------------------------------------------------------
+
+def build_timeline(
+    dns_tunneling_candidates: list[dict],
+    credential_findings: list[dict],
+    suspicious_downloads: list[dict],
+    beaconing_candidates: list[dict],
+    http_body_previews: list[dict],
+    tls_sni_anomalies: list[dict],
+    suspicious_user_agents: list[dict],
+    lateral_movement_candidates: list[dict],
+    malicious_ja3_findings: list[dict],
+    credential_posts: list[dict],
+    file_indicators: list[dict],
+    http_response_anomalies: list[dict],
+    flow_times: dict,
+) -> list[dict]:
+    """Assemble a chronologically sorted event timeline from all detection results."""
+    events = []
+
+    def _add(timestamp, event_type, src_ip, dst_ip, detail, technique=""):
+        events.append({
+            "timestamp": str(timestamp or ""),
+            "event_type": event_type,
+            "src_ip": str(src_ip or ""),
+            "dst_ip": str(dst_ip or ""),
+            "detail": str(detail or "")[:300],
+            "mitre_technique_id": technique,
+        })
+
+    for item in dns_tunneling_candidates:
+        _add(item.get("timestamp"), "DNS_TUNNELING", item.get("src_ip"), item.get("dst_ip"),
+             item.get("reason"), "T1071.004")
+
+    for item in credential_findings:
+        _add("", "CREDENTIAL_INDICATOR", item.get("src_ip"), item.get("dst_ip"),
+             f"{item.get('severity')} — {item.get('indicator_type')} in {item.get('source_type')}",
+             "T1552")
+
+    for item in credential_posts:
+        _add("", "CREDENTIAL_POST", item.get("src_ip"), item.get("dst_ip"),
+             f"POST to {item.get('host')}{item.get('uri')}", "T1056.003")
+
+    for item in suspicious_downloads:
+        _add("", "SUSPICIOUS_DOWNLOAD", item.get("src_ip"), item.get("dst_ip"),
+             item.get("reason"), "T1105")
+
+    for item in http_body_previews:
+        method = (item.get("http_method") or "").upper()
+        if method in {"POST", "PUT", "PATCH"}:
+            _add(item.get("timestamp"), "HTTP_BODY_OBSERVED", item.get("src_ip"), item.get("dst_ip"),
+                 f"{method} {item.get('host')}{item.get('uri')}", "T1071.001")
+
+    for item in tls_sni_anomalies:
+        _add("", "TLS_SNI_ANOMALY", item.get("src_ip"), item.get("dst_ip"),
+             item.get("reason"), "T1071.001")
+
+    for item in suspicious_user_agents:
+        _add(item.get("timestamp"), "SUSPICIOUS_UA", item.get("src_ip"), item.get("dst_ip"),
+             item.get("reason"), "T1071.001")
+
+    for item in lateral_movement_candidates:
+        _add("", "LATERAL_MOVEMENT", item.get("src_ip"), "",
+             item.get("reason"), item.get("mitre_technique_id", "T1021.002"))
+
+    for item in malicious_ja3_findings:
+        _add(item.get("timestamp"), "MALICIOUS_JA3", item.get("src_ip"), item.get("dst_ip"),
+             item.get("reason"), "T1071.001")
+
+    for item in file_indicators:
+        _add(item.get("timestamp"), "FILE_INDICATOR", item.get("src_ip"), item.get("dst_ip"),
+             f"{item.get('protocol')} — {item.get('filename')}", "T1105")
+
+    for item in beaconing_candidates:
+        # Use first seen timestamp from flow_times if available
+        flow_key = (
+            item.get("src_ip"), item.get("dst_ip"),
+            item.get("sport"), item.get("dport"), item.get("protocol"),
+        )
+        times = flow_times.get(flow_key, [])
+        ts = str(min(times)) if times else ""
+        _add(ts, "BEACONING", item.get("src_ip"), item.get("dst_ip"),
+             f"jitter={item.get('jitter_pct')}% avg_interval={item.get('avg_interval_sec')}s",
+             "T1071.001")
+
+    for item in http_response_anomalies:
+        _add("", "HTTP_RESPONSE_ANOMALY", item.get("src_ip"), item.get("dst_ip"),
+             item.get("reason"), "T1105")
+
+    # Sort: entries with timestamps first, sorted ascending; timestampless at end
+    events_with_ts = sorted(
+        [e for e in events if e["timestamp"]],
+        key=lambda x: x["timestamp"],
+    )
+    events_without_ts = [e for e in events if not e["timestamp"]]
+    return events_with_ts + events_without_ts
+
+
+# ---------------------------------------------------------------------------
+# Passive DNS map
+# ---------------------------------------------------------------------------
+
+def build_dns_resolution_map(dns_rows: list[dict]) -> list[dict]:
+    """Return deduplicated domain→IP resolution rows for dns_resolutions.csv."""
+    seen: set[tuple] = set()
+    results = []
+    for row in dns_rows:
+        qname = (row.get("dns.qry.name", "") or "").strip().lower().rstrip(".")
+        resolved = (row.get("dns.a", "") or "").strip()
+        cname = (row.get("dns.cname", "") or "").strip()
+        ttl = (row.get("dns.resp.ttl", "") or "").strip()
+        ts = row.get("frame.time", "")
+        src = row.get("ip.src", "")
+        dst = row.get("ip.dst", "")
+
+        if resolved:
+            key = (qname, resolved)
+            if key not in seen:
+                seen.add(key)
+                results.append({
+                    "timestamp": ts,
+                    "src_ip": src,
+                    "dns_server": dst,
+                    "qname": qname,
+                    "resolved_ip": resolved,
+                    "cname": cname,
+                    "ttl": ttl,
+                })
+        elif cname:
+            key = (qname, cname)
+            if key not in seen:
+                seen.add(key)
+                results.append({
+                    "timestamp": ts,
+                    "src_ip": src,
+                    "dns_server": dst,
+                    "qname": qname,
+                    "resolved_ip": "",
+                    "cname": cname,
+                    "ttl": ttl,
+                })
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="PCAP Security Toolkit")
@@ -125,6 +339,22 @@ def main():
         default=25,
         help="Maximum number of TCP streams to export",
     )
+    parser.add_argument(
+        "--severity-filter",
+        choices=["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"],
+        default="HIGH",
+        help="Minimum severity level to display in terminal output (default: HIGH)",
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=["csv", "html", "both"],
+        default="csv",
+        help="Output format: csv (default), html, or both",
+    )
+    parser.add_argument(
+        "--geoip-db",
+        help="Path to a GeoLite2-ASN.mmdb or GeoLite2-City.mmdb file for IP enrichment",
+    )
     args = parser.parse_args()
 
     pcap_path = Path(args.pcap)
@@ -134,21 +364,30 @@ def main():
     case_output_dir = get_case_output_dir(OUTPUT_DIR, args.case)
 
     print("=" * 70)
-    print("PCAP SECURITY TOOLKIT v1.5.0")
+    print("PCAP SECURITY TOOLKIT v2.0.0")
     print("=" * 70)
 
-    print(f"[*] Loading packets from {pcap_path}")
-    packets = rdpcap(str(pcap_path))
-
-    print("[*] Analyzing flows")
-    flow_data = analyze_flows(packets)
+    # ------------------------------------------------------------------
+    # Packet-level analysis — two streaming passes to avoid loading into RAM
+    # ------------------------------------------------------------------
+    print(f"[*] Loading and analyzing flows from {pcap_path}")
+    with PcapReader(str(pcap_path)) as reader:
+        flow_data = analyze_flows(reader)
 
     print("[*] Analyzing DNS/HTTP")
-    protocol_data = analyze_dns_http_tls(packets)
+    with PcapReader(str(pcap_path)) as reader:
+        protocol_data = analyze_dns_http_tls(reader)
 
+    # ------------------------------------------------------------------
+    # Initialize result containers
+    # ------------------------------------------------------------------
     http_rows = []
+    http_response_rows = []
+    dns_rows = []
     smb_rows = []
     ftp_rows = []
+    smtp_rows = []
+    kerberos_rows = []
     tcp_stream_rows = []
     stream_ids = []
     tls_rows = []
@@ -163,19 +402,37 @@ def main():
     suspicious_downloads = []
     entropy_exfil_candidates = []
     tls_sni_anomalies = []
+    dns_tunneling_candidates = []
+    suspicious_user_agents = []
+    lateral_movement_candidates = []
+    protocol_anomaly_findings = []
+    malicious_ja3_findings = []
+    http_response_anomalies = []
 
+    # ------------------------------------------------------------------
+    # TShark-assisted extraction
+    # ------------------------------------------------------------------
     if has_tshark():
         print("[*] Running TShark extraction")
         http_rows, http_err = extract_http_fields(pcap_path)
+        http_response_rows, http_resp_err = extract_http_response_fields(pcap_path)
+        dns_rows, dns_err = extract_dns_fields(pcap_path)
         smb_rows, smb_err = extract_smb_fields(pcap_path)
         ftp_rows, ftp_err = extract_ftp_fields(pcap_path)
+        smtp_rows, smtp_err = extract_smtp_fields(pcap_path)
+        kerberos_rows, kerb_err = extract_kerberos_fields(pcap_path)
 
-        if http_err:
-            print(f"[!] HTTP TShark extraction warning: {http_err}")
-        if smb_err:
-            print(f"[!] SMB TShark extraction warning: {smb_err}")
-        if ftp_err:
-            print(f"[!] FTP TShark extraction warning: {ftp_err}")
+        for label, err in [
+            ("HTTP request", http_err),
+            ("HTTP response", http_resp_err),
+            ("DNS", dns_err),
+            ("SMB", smb_err),
+            ("FTP", ftp_err),
+            ("SMTP/IMAP", smtp_err),
+            ("Kerberos", kerb_err),
+        ]:
+            if err:
+                print(f"[!] {label} TShark extraction warning: {err}")
 
         print("[*] Extracting TCP stream index")
         tcp_stream_rows, stream_err = extract_tcp_stream_index(pcap_path)
@@ -196,53 +453,47 @@ def main():
             print("[*] Building HTTP body previews")
             http_body_previews = build_http_body_previews(http_rows)
 
+        # Stream export and payload extraction
         if args.export_streams and stream_ids:
             streams_dir = case_output_dir / "streams"
             streams_dir.mkdir(parents=True, exist_ok=True)
 
             export_stream_ids = stream_ids[: args.max_streams]
-            print(f"[*] Exporting up to {len(export_stream_ids)} TCP streams in ascii and raw modes")
+            print(f"[*] Exporting up to {len(export_stream_ids)} TCP streams (ascii + raw)")
 
             for stream_id in export_stream_ids:
-                ascii_content, ascii_err = export_follow_stream(
-                    pcap_path,
-                    stream_id,
-                    mode="ascii",
-                )
+                ascii_content, ascii_err = export_follow_stream(pcap_path, stream_id, mode="ascii")
                 if ascii_content is not None:
-                    ascii_output = streams_dir / f"tcp_stream_{stream_id}.ascii.txt"
-                    ascii_output.write_text(ascii_content, encoding="utf-8", errors="replace")
+                    (streams_dir / f"tcp_stream_{stream_id}.ascii.txt").write_text(
+                        ascii_content, encoding="utf-8", errors="replace"
+                    )
                 else:
                     print(f"[!] Failed to export tcp.stream {stream_id} ascii: {ascii_err}")
 
-                raw_content, raw_err = export_follow_stream(
-                    pcap_path,
-                    stream_id,
-                    mode="raw",
-                )
+                raw_content, raw_err = export_follow_stream(pcap_path, stream_id, mode="raw")
                 if raw_content is not None:
-                    raw_output = streams_dir / f"tcp_stream_{stream_id}.raw.txt"
-                    raw_output.write_text(raw_content, encoding="utf-8", errors="replace")
+                    (streams_dir / f"tcp_stream_{stream_id}.raw.txt").write_text(
+                        raw_content, encoding="utf-8", errors="replace"
+                    )
                 else:
                     print(f"[!] Failed to export tcp.stream {stream_id} raw: {raw_err}")
 
             print("[*] Detecting and extracting payloads using ascii + raw streams")
             extracted_payloads = save_extracted_payloads(
-                case_output_dir,
-                streams_dir,
-                tcp_stream_rows,
+                case_output_dir, streams_dir, tcp_stream_rows
             )
 
             print("[*] Carving files from raw TCP streams")
             carved_files = carve_files_from_raw_streams(
-                case_output_dir,
-                streams_dir,
-                tcp_stream_rows,
+                case_output_dir, streams_dir, tcp_stream_rows
             )
 
     else:
-        print("[!] TShark not found. Skipping TShark-assisted extraction.")
+        print("[!] TShark not found — skipping TShark-assisted extraction.")
 
+    # ------------------------------------------------------------------
+    # Detections
+    # ------------------------------------------------------------------
     print("[*] Extracting file indicators")
     file_indicators = extract_file_indicators(http_rows, smb_rows, ftp_rows)
 
@@ -265,7 +516,52 @@ def main():
     if tls_summary:
         print("[*] Detecting TLS SNI anomalies")
         tls_sni_anomalies = detect_tls_sni_anomalies(tls_summary)
+        print("[*] Detecting malicious JA3 fingerprints")
+        malicious_ja3_findings = detect_malicious_ja3(tls_summary)
 
+    if dns_rows:
+        print("[*] Detecting DNS tunneling candidates")
+        dns_tunneling_candidates = detect_dns_tunneling(dns_rows)
+
+    if http_rows:
+        print("[*] Detecting suspicious user agents")
+        suspicious_user_agents = detect_suspicious_user_agents(http_rows)
+
+    print("[*] Detecting lateral movement candidates")
+    lateral_movement_candidates = detect_lateral_movement(
+        flow_data["flow_bytes"], flow_data["flow_times"]
+    )
+
+    print("[*] Detecting protocol anomalies")
+    protocol_anomaly_findings = detect_protocol_anomalies(
+        http_rows, tls_summary, ftp_rows, smtp_rows, kerberos_rows
+    )
+
+    if http_response_rows:
+        print("[*] Detecting HTTP response anomalies")
+        http_response_anomalies = detect_http_response_anomalies(http_response_rows)
+
+    # ------------------------------------------------------------------
+    # GeoIP enrichment (optional)
+    # ------------------------------------------------------------------
+    geoip_map: dict = {}
+    enricher = GeoIPEnricher(db_path=args.geoip_db)
+    if enricher.available:
+        print("[*] Running GeoIP enrichment")
+        external_ips = [
+            ip for flow_key in flow_data["flow_bytes"]
+            for ip in (flow_key[0], flow_key[1])
+            if ip and not is_private_ip(ip)
+        ]
+        geoip_map = enrich_ips(list(set(external_ips)), enricher)
+        enricher.close()
+    else:
+        if args.geoip_db:
+            print("[!] GeoIP db specified but could not be loaded — skipping enrichment.")
+
+    # ------------------------------------------------------------------
+    # Build alerts
+    # ------------------------------------------------------------------
     print("[*] Building alerts")
     alerts = build_alerts(
         flow_data["flow_bytes"],
@@ -278,8 +574,58 @@ def main():
         entropy_exfil_candidates=entropy_exfil_candidates,
         credential_posts=credential_posts,
         tls_sni_anomalies=tls_sni_anomalies,
+        dns_tunneling_candidates=dns_tunneling_candidates,
+        suspicious_user_agents=suspicious_user_agents,
+        lateral_movement_candidates=lateral_movement_candidates,
+        protocol_anomalies=protocol_anomaly_findings,
+        malicious_ja3_findings=malicious_ja3_findings,
+        kerberos_rows=kerberos_rows,
+        http_response_anomalies=http_response_anomalies,
     )
 
+    # ------------------------------------------------------------------
+    # IOC extraction
+    # ------------------------------------------------------------------
+    print("[*] Extracting IOCs")
+    iocs = extract_iocs(
+        flow_bytes=flow_data["flow_bytes"],
+        dns_rows=dns_rows,
+        tls_summary=tls_summary,
+        http_rows=http_rows,
+        extracted_payloads=extracted_payloads,
+        carved_files=carved_files,
+        alerts=alerts,
+        geoip_map=geoip_map,
+    )
+
+    # ------------------------------------------------------------------
+    # Timeline
+    # ------------------------------------------------------------------
+    print("[*] Building timeline")
+    timeline = build_timeline(
+        dns_tunneling_candidates=dns_tunneling_candidates,
+        credential_findings=credential_findings,
+        suspicious_downloads=suspicious_downloads,
+        beaconing_candidates=beaconing_candidates,
+        http_body_previews=http_body_previews,
+        tls_sni_anomalies=tls_sni_anomalies,
+        suspicious_user_agents=suspicious_user_agents,
+        lateral_movement_candidates=lateral_movement_candidates,
+        malicious_ja3_findings=malicious_ja3_findings,
+        credential_posts=credential_posts,
+        file_indicators=file_indicators,
+        http_response_anomalies=http_response_anomalies,
+        flow_times=flow_data["flow_times"],
+    )
+
+    # ------------------------------------------------------------------
+    # DNS resolution map
+    # ------------------------------------------------------------------
+    dns_resolutions = build_dns_resolution_map(dns_rows)
+
+    # ------------------------------------------------------------------
+    # Build report dict
+    # ------------------------------------------------------------------
     report = {
         "summary": flow_data["summary"],
         "top_protocols": flow_data["protocol_counter"].most_common(args.top),
@@ -299,35 +645,78 @@ def main():
         "entropy_exfil_candidate_count": len(entropy_exfil_candidates),
         "beaconing_candidate_count": len(beaconing_candidates),
         "tls_sni_anomaly_count": len(tls_sni_anomalies),
+        "dns_tunneling_count": len(dns_tunneling_candidates),
+        "suspicious_ua_count": len(suspicious_user_agents),
+        "lateral_movement_count": len(lateral_movement_candidates),
+        "protocol_anomaly_count": len(protocol_anomaly_findings),
+        "malicious_ja3_count": len(malicious_ja3_findings),
+        "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
+        "ioc_count": len(iocs),
         "alerts_count": len(alerts),
         "case_output_dir": str(case_output_dir),
+        "geoip_enabled": enricher.available,
     }
 
+    # ------------------------------------------------------------------
+    # Write output files
+    # ------------------------------------------------------------------
     print("[*] Writing output files")
     write_json(case_output_dir / "report.json", report)
     write_csv(case_output_dir / "http_requests.csv", protocol_data["notable_http"])
     write_csv(case_output_dir / "http_tshark.csv", http_rows)
+    write_csv(case_output_dir / "http_responses.csv", http_response_rows)
     write_csv(case_output_dir / "http_body_previews.csv", http_body_previews)
     write_csv(case_output_dir / "tcp_stream_index.csv", tcp_stream_rows)
     write_csv(case_output_dir / "tls_metadata.csv", tls_summary)
     write_csv(case_output_dir / "tls_sni_anomalies.csv", tls_sni_anomalies)
+    write_csv(case_output_dir / "malicious_ja3.csv", malicious_ja3_findings)
     write_csv(case_output_dir / "smb_tshark.csv", smb_rows)
     write_csv(case_output_dir / "ftp_tshark.csv", ftp_rows)
+    write_csv(case_output_dir / "smtp_activity.csv", smtp_rows)
+    write_csv(case_output_dir / "kerberos_activity.csv", kerberos_rows)
+    write_csv(case_output_dir / "dns_resolutions.csv", dns_resolutions)
+    write_csv(case_output_dir / "dns_tunneling_candidates.csv", dns_tunneling_candidates)
     write_csv(case_output_dir / "file_indicators.csv", file_indicators)
     write_csv(case_output_dir / "beaconing_candidates.csv", beaconing_candidates)
     write_csv(case_output_dir / "credential_findings.csv", credential_findings)
     write_csv(case_output_dir / "credential_posts.csv", credential_posts)
     write_csv(case_output_dir / "suspicious_downloads.csv", suspicious_downloads)
+    write_csv(case_output_dir / "suspicious_user_agents.csv", suspicious_user_agents)
     write_csv(case_output_dir / "entropy_exfil_candidates.csv", entropy_exfil_candidates)
+    write_csv(case_output_dir / "lateral_movement_candidates.csv", lateral_movement_candidates)
+    write_csv(case_output_dir / "protocol_anomalies.csv", protocol_anomaly_findings)
+    write_csv(case_output_dir / "http_response_anomalies.csv", http_response_anomalies)
     write_csv(case_output_dir / "carved_files.csv", carved_files)
+    write_csv(case_output_dir / "iocs.csv", iocs)
+    write_csv(case_output_dir / "timeline.csv", timeline)
     write_csv(case_output_dir / "alerts.csv", alerts)
     write_extracted_payload_index(
         case_output_dir / "extracted_payloads_index.csv",
         extracted_payloads,
     )
 
-    print_report_summary(report)
+    # Optional HTML report
+    if args.output_format in {"html", "both"}:
+        print("[*] Generating HTML report")
+        html_content = generate_html_report(
+            report=report,
+            alerts=alerts,
+            pcap_name=pcap_path.name,
+            case_output_dir=str(case_output_dir),
+            top_protocols=report["top_protocols"],
+            top_ips=report["top_ips"],
+            top_conversations=report["top_conversations"],
+            top_dns=report["top_dns_queries"],
+            top_hosts=report["top_http_hosts"],
+            iocs=iocs,
+            timeline=timeline,
+        )
+        html_path = case_output_dir / "report.html"
+        html_path.write_text(html_content, encoding="utf-8")
+        print(f"[+] HTML report: {html_path}")
+
+    print_report_summary(report, alerts, args.severity_filter)
     print(f"\n[+] Results written to: {case_output_dir}")
 
 
