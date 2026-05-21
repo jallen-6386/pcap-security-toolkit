@@ -157,3 +157,51 @@ def extract_kerberos_fields(pcap_path):
         "kerberos.etype",
     ]
     return run_tshark_fields(pcap_path, fields, display_filter="kerberos")
+
+
+def extract_icmp_fields(pcap_path):
+    """Extract ICMP packet metadata for tunnel and covert channel detection."""
+    fields = [
+        "frame.time",
+        "ip.src",
+        "ip.dst",
+        "icmp.type",
+        "icmp.code",
+        "icmp.seq",
+        "frame.len",
+        "data.len",
+    ]
+    return run_tshark_fields(pcap_path, fields, display_filter="icmp")
+
+
+def extract_arp_fields(pcap_path):
+    """Extract ARP packet fields for spoofing and MITM detection."""
+    fields = [
+        "frame.time",
+        "arp.opcode",
+        "arp.src.proto_ipv4",
+        "arp.dst.proto_ipv4",
+        "arp.src.hw_mac",
+        "arp.dst.hw_mac",
+    ]
+    return run_tshark_fields(pcap_path, fields, display_filter="arp")
+
+
+def extract_tcp_syn_fields(pcap_path):
+    """Extract TCP SYN characteristics for passive OS fingerprinting."""
+    fields = [
+        "frame.time",
+        "ip.src",
+        "ip.dst",
+        "tcp.srcport",
+        "tcp.dstport",
+        "ip.ttl",
+        "tcp.window_size_value",
+        "tcp.options.mss_val",
+        "tcp.options.wscale.multiplier",
+    ]
+    return run_tshark_fields(
+        pcap_path,
+        fields,
+        display_filter="tcp.flags.syn == 1 and tcp.flags.ack == 0",
+    )
