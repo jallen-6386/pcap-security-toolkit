@@ -2,7 +2,7 @@
 
 """
 PCAP Security Toolkit
-Version: 2.1.0
+Version: 2.2.0
 """
 
 import argparse
@@ -50,6 +50,13 @@ from modules.https_metadata import (
 )
 from modules.ja4 import compute_ja4h_rows, enrich_tls_summary_with_ja4
 from modules.iocs import extract_iocs
+from modules.arp_detection import detect_arp_spoofing
+from modules.icmp_tunnel import detect_icmp_tunneling
+from modules.jarm import probe_observed_servers
+from modules.os_fingerprint import fingerprint_hosts
+from modules.smtp_attachments import extract_smtp_attachments
+from modules.stix_export import export_stix_bundle
+from modules.yara_scanner import load_rules, scan_files, yara_available
 from modules.payloads import (
     carve_files_from_raw_streams,
     save_extracted_payloads,
@@ -62,13 +69,16 @@ from modules.streams import (
     get_unique_tcp_stream_ids,
 )
 from modules.tshark_extract import (
+    extract_arp_fields,
     extract_dns_fields,
     extract_ftp_fields,
     extract_http_fields,
     extract_http_response_fields,
+    extract_icmp_fields,
     extract_kerberos_fields,
     extract_smtp_fields,
     extract_smb_fields,
+    extract_tcp_syn_fields,
 )
 from modules.utils import is_private_ip
 
@@ -119,6 +129,12 @@ def print_report_summary(report: dict, alerts: list[dict], severity_filter: str)
     print(f"Malicious JA3 Hits:         {report.get('malicious_ja3_count', 0)}")
     print(f"Malicious JA4 Hits:         {report.get('malicious_ja4_count', 0)}")
     print(f"JA4H Fingerprints:          {report.get('ja4h_count', 0)}")
+    print(f"JARM Fingerprints:          {report.get('jarm_count', 0)}")
+    print(f"ICMP Tunneling Candidates:  {report.get('icmp_tunneling_count', 0)}")
+    print(f"ARP Anomalies:              {report.get('arp_anomaly_count', 0)}")
+    print(f"OS Fingerprints:            {report.get('os_fingerprint_count', 0)}")
+    print(f"SMTP Attachments:           {report.get('smtp_attachment_count', 0)}")
+    print(f"YARA Hits:                  {report.get('yara_hit_count', 0)}")
     print(f"HTTP Response Anomalies:    {report.get('http_response_anomaly_count', 0)}")
     print(f"Carved Files:               {report.get('carved_file_count', 0)}")
     print(f"IOCs Extracted:             {report.get('ioc_count', 0)}")
@@ -363,6 +379,15 @@ def main():
         "--geoip-db",
         help="Path to a GeoLite2-ASN.mmdb or GeoLite2-City.mmdb file for IP enrichment",
     )
+    parser.add_argument(
+        "--yara-rules",
+        help="Path to a YARA rules file (.yar) or directory of rules to scan carved files and payloads",
+    )
+    parser.add_argument(
+        "--jarm-probe",
+        action="store_true",
+        help="Actively probe observed TLS servers with JARM fingerprinting (requires outbound connectivity)",
+    )
     args = parser.parse_args()
 
     pcap_path = Path(args.pcap)
@@ -372,7 +397,7 @@ def main():
     case_output_dir = get_case_output_dir(OUTPUT_DIR, args.case)
 
     print("=" * 70)
-    print("PCAP SECURITY TOOLKIT v2.1.0")
+    print("PCAP SECURITY TOOLKIT v2.2.0")
     print("=" * 70)
 
     # ------------------------------------------------------------------
@@ -418,6 +443,15 @@ def main():
     malicious_ja4_findings = []
     ja4h_rows = []
     http_response_anomalies = []
+    icmp_rows = []
+    arp_rows = []
+    syn_rows = []
+    icmp_candidates = []
+    arp_anomalies = []
+    os_fingerprints = []
+    smtp_attachments_list = []
+    yara_hits = []
+    jarm_results = []
 
     # ------------------------------------------------------------------
     # TShark-assisted extraction
@@ -432,6 +466,10 @@ def main():
         smtp_rows, smtp_err = extract_smtp_fields(pcap_path)
         kerberos_rows, kerb_err = extract_kerberos_fields(pcap_path)
 
+        icmp_rows, icmp_err = extract_icmp_fields(pcap_path)
+        arp_rows, arp_err = extract_arp_fields(pcap_path)
+        syn_rows, syn_err = extract_tcp_syn_fields(pcap_path)
+
         for label, err in [
             ("HTTP request", http_err),
             ("HTTP response", http_resp_err),
@@ -440,6 +478,9 @@ def main():
             ("FTP", ftp_err),
             ("SMTP/IMAP", smtp_err),
             ("Kerberos", kerb_err),
+            ("ICMP", icmp_err),
+            ("ARP", arp_err),
+            ("TCP SYN", syn_err),
         ]:
             if err:
                 print(f"[!] {label} TShark extraction warning: {err}")
@@ -501,6 +542,11 @@ def main():
             print("[*] Computing JA4H HTTP fingerprints from streams")
             ja4h_rows = compute_ja4h_rows(streams_dir, tcp_stream_rows)
 
+            print("[*] Extracting SMTP attachments from streams")
+            smtp_attachments_list = extract_smtp_attachments(
+                streams_dir, tcp_stream_rows, case_output_dir
+            )
+
     else:
         print("[!] TShark not found — skipping TShark-assisted extraction.")
 
@@ -557,6 +603,33 @@ def main():
         print("[*] Detecting HTTP response anomalies")
         http_response_anomalies = detect_http_response_anomalies(http_response_rows)
 
+    if icmp_rows:
+        print("[*] Detecting ICMP tunneling candidates")
+        icmp_candidates = detect_icmp_tunneling(icmp_rows)
+
+    if arp_rows:
+        print("[*] Detecting ARP spoofing")
+        arp_anomalies = detect_arp_spoofing(arp_rows)
+
+    if syn_rows:
+        print("[*] Passive OS fingerprinting")
+        os_fingerprints = fingerprint_hosts(syn_rows)
+
+    if args.yara_rules:
+        yara_rules_compiled = load_rules(args.yara_rules)
+        if yara_rules_compiled:
+            print("[*] Running YARA scanning")
+            yara_targets = carved_files + extracted_payloads + smtp_attachments_list
+            yara_hits = scan_files(yara_rules_compiled, yara_targets)
+        elif not yara_available():
+            print("[!] YARA scanning requires: pip install yara-python")
+        else:
+            print(f"[!] Could not load YARA rules from: {args.yara_rules}")
+
+    if args.jarm_probe and tls_summary:
+        print("[*] Running JARM fingerprinting (active probing)")
+        jarm_results = probe_observed_servers(tls_summary)
+
     # ------------------------------------------------------------------
     # GeoIP enrichment (optional)
     # ------------------------------------------------------------------
@@ -596,6 +669,10 @@ def main():
         protocol_anomalies=protocol_anomaly_findings,
         malicious_ja3_findings=malicious_ja3_findings,
         malicious_ja4_findings=malicious_ja4_findings,
+        icmp_candidates=icmp_candidates,
+        arp_anomalies=arp_anomalies,
+        jarm_results=jarm_results,
+        yara_hits=yara_hits,
         kerberos_rows=kerberos_rows,
         http_response_anomalies=http_response_anomalies,
     )
@@ -614,6 +691,7 @@ def main():
         alerts=alerts,
         geoip_map=geoip_map,
         ja4h_rows=ja4h_rows,
+        smtp_attachments=smtp_attachments_list,
     )
 
     # ------------------------------------------------------------------
@@ -670,6 +748,12 @@ def main():
         "malicious_ja3_count": len(malicious_ja3_findings),
         "malicious_ja4_count": len(malicious_ja4_findings),
         "ja4h_count": len(ja4h_rows),
+        "icmp_tunneling_count": len(icmp_candidates),
+        "arp_anomaly_count": len(arp_anomalies),
+        "os_fingerprint_count": len(os_fingerprints),
+        "smtp_attachment_count": len(smtp_attachments_list),
+        "yara_hit_count": len(yara_hits),
+        "jarm_count": len(jarm_results),
         "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
         "ioc_count": len(iocs),
@@ -709,8 +793,18 @@ def main():
     write_csv(case_output_dir / "lateral_movement_candidates.csv", lateral_movement_candidates)
     write_csv(case_output_dir / "protocol_anomalies.csv", protocol_anomaly_findings)
     write_csv(case_output_dir / "http_response_anomalies.csv", http_response_anomalies)
+    write_csv(case_output_dir / "icmp_tunneling_candidates.csv", icmp_candidates)
+    write_csv(case_output_dir / "arp_anomalies.csv", arp_anomalies)
+    write_csv(case_output_dir / "os_fingerprints.csv", os_fingerprints)
+    write_csv(case_output_dir / "smtp_attachments.csv", smtp_attachments_list)
+    write_csv(case_output_dir / "yara_hits.csv", yara_hits)
+    write_csv(case_output_dir / "jarm_fingerprints.csv", jarm_results)
     write_csv(case_output_dir / "carved_files.csv", carved_files)
     write_csv(case_output_dir / "iocs.csv", iocs)
+
+    print("[*] Exporting STIX 2.1 IOC bundle")
+    stix_bundle = export_stix_bundle(iocs, case_name=args.case or "")
+    (case_output_dir / "iocs.stix2.json").write_text(stix_bundle, encoding="utf-8")
     write_csv(case_output_dir / "timeline.csv", timeline)
     write_csv(case_output_dir / "alerts.csv", alerts)
     write_extracted_payload_index(

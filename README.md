@@ -50,6 +50,10 @@ This project uses:
 | TLS SNI anomalies (long, hex-like, suspicious TLDs) | `TLS_SNI_ANOMALY` | T1071.001 |
 | Malicious JA3 fingerprints (9 known families) | `MALICIOUS_JA3` | T1071.001 |
 | Malicious JA4 fingerprints (5 known C2 families) | `MALICIOUS_JA4` | T1071.001 |
+| Active JARM server fingerprinting (5 known C2 families) | `MALICIOUS_JARM` | T1071.001 |
+| ICMP tunnel / covert channel detection | `ICMP_TUNNELING_CANDIDATE` | T1095 |
+| ARP spoofing and gratuitous ARP flooding | `ARP_SPOOFING_CANDIDATE` | T1557.002 |
+| YARA rule scanning on carved files and payloads | `YARA_MATCH` | T1105 |
 | Suspicious user agents (tools, empty, malware-assoc.) | `SUSPICIOUS_USER_AGENT` | T1071.001 |
 | Protocol on non-standard port | `PROTOCOL_ANOMALY` | T1571 |
 | Internal SMB lateral spread | `LATERAL_MOVEMENT_CANDIDATE` | T1021.002 |
@@ -63,11 +67,16 @@ This project uses:
 - Alerts sorted by severity descending
 - `--severity-filter` flag to control terminal display threshold
 - `--output-format html` generates a self-contained `report.html` with severity-colored alert table, stat cards, and collapsible sections — no external CSS or JS dependencies
-- `iocs.csv` — deduplicated IOC list (IPs, domains, URLs, SHA-256, user-agents, JA3/JA4/JA4H hashes) with optional GeoIP enrichment
+- `iocs.csv` — deduplicated IOC list (IPs, domains, URLs, SHA-256, user-agents, JA3/JA4/JA4H/JARM hashes) with optional GeoIP enrichment
+- `iocs.stix2.json` — STIX 2.1 IOC bundle for direct import into MISP, OpenCTI, or TheHive (no external dependency)
 - `timeline.csv` — chronologically sorted event timeline with MITRE technique IDs
 - Optional GeoIP/ASN enrichment via `maxminddb` and GeoLite2 database
 
 ### Payload Analysis
+- Passive OS fingerprinting from TCP SYN characteristics (TTL, window size, MSS)
+- SMTP attachment extraction and hashing from exported streams
+- YARA rule scanning on carved files and extracted payloads (optional `yara-python`)
+- Active JARM TLS server fingerprinting with known C2 hash lookup (`--jarm-probe`)
 - TCP stream export in ASCII and RAW modes
 - HTTP payload extraction from reconstructable plaintext streams
 - Base64 payload decoding
@@ -121,6 +130,7 @@ pcap-security-toolkit/
 
 **Optional:**
 - `maxminddb` + GeoLite2 database for GeoIP/ASN enrichment
+- `yara-python` for YARA rule scanning (`pip install yara-python`)
 
 ---
 
@@ -199,6 +209,8 @@ analyzer.py [-h] [--top N] [--case NAME]
 | `--severity-filter` | HIGH | Minimum severity for terminal alert display |
 | `--output-format` | csv | Output format: csv, html, or both |
 | `--geoip-db` | auto | Path to GeoLite2 .mmdb database file |
+| `--yara-rules` | off | Path to a YARA rules file or directory to scan carved files and payloads |
+| `--jarm-probe` | off | Actively fingerprint observed TLS servers with JARM (requires outbound connectivity) |
 
 ---
 
@@ -242,6 +254,13 @@ output/
     ├── malicious_ja3.csv
     ├── malicious_ja4.csv
     ├── ja4h.csv
+    ├── jarm_fingerprints.csv
+    ├── icmp_tunneling_candidates.csv
+    ├── arp_anomalies.csv
+    ├── os_fingerprints.csv
+    ├── smtp_attachments.csv
+    ├── yara_hits.csv
+    ├── iocs.stix2.json
     ├── smb_tshark.csv
     ├── ftp_tshark.csv
     ├── smtp_activity.csv
@@ -425,4 +444,6 @@ Install Wireshark/TShark and ensure it is in your PATH. The toolkit also auto-de
 - Additional Kerberos attack pattern signatures (AS-REP roasting scoring)
 - Deeper multipart body parsing
 - STIX 2.1 IOC export format
-- Expanded JA3/JA4 threat intel database
+- Expanded JA3/JA4/JARM threat intel database
+- TLS key log file support for HTTPS decryption
+- STIX 2.1 relationship objects (Indicator → Malware / Infrastructure)

@@ -4,3 +4,7 @@ scapy
 # Requires a GeoLite2 .mmdb database file (free from https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)
 # Install with: pip install maxminddb
 # maxminddb
+
+# Optional: YARA rule scanning for carved files and extracted payloads
+# Install with: pip install yara-python
+# yara-python

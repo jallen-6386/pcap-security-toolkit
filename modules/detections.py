@@ -88,6 +88,10 @@ MITRE_MAP = {
     "INTERNAL_SCAN_CANDIDATE":            ("T1046",    "Discovery",             "Network Service Discovery"),
     "MALICIOUS_JA3":                      ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
     "MALICIOUS_JA4":                      ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
+    "MALICIOUS_JARM":                     ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
+    "ICMP_TUNNELING_CANDIDATE":           ("T1095",    "Command and Control",   "Non-Application Layer Protocol"),
+    "ARP_SPOOFING_CANDIDATE":             ("T1557.002","Credential Access",     "Adversary-in-the-Middle: ARP Cache Poisoning"),
+    "YARA_MATCH":                         ("T1105",    "Command and Control",   "Ingress Tool Transfer"),
     "KERBEROS_ANOMALY":                   ("T1558",    "Credential Access",     "Steal or Forge Kerberos Tickets"),
     "EMAIL_ACTIVITY":                     ("T1048",    "Exfiltration",          "Exfiltration Over Alternative Protocol"),
     "HTTP_RESPONSE_ANOMALY":              ("T1105",    "Command and Control",   "Ingress Tool Transfer"),
@@ -97,6 +101,10 @@ ALERT_SEVERITY_MAP = {
     "CREDENTIAL_POST_RECONSTRUCTED":      "CRITICAL",
     "MALICIOUS_JA3":                      "CRITICAL",
     "MALICIOUS_JA4":                      "CRITICAL",
+    "MALICIOUS_JARM":                     "CRITICAL",
+    "ARP_SPOOFING_CANDIDATE":             "HIGH",
+    "ICMP_TUNNELING_CANDIDATE":           "MEDIUM",
+    "YARA_MATCH":                         "HIGH",
     "DNS_TUNNELING_CANDIDATE":            "HIGH",
     "CREDENTIAL_INDICATOR":               "HIGH",
     "ENTROPY_BASED_EXFIL_CANDIDATE":      "HIGH",
@@ -121,9 +129,10 @@ _SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
 
 def _enrich_alert(alert: dict) -> dict:
     alert_type = alert.get("alert_type", "")
-    severity = ALERT_SEVERITY_MAP.get(alert_type, "INFO")
+    # Preserve caller-supplied severity (e.g., from YARA rule metadata)
+    if "severity" not in alert:
+        alert["severity"] = ALERT_SEVERITY_MAP.get(alert_type, "INFO")
     technique_id, tactic, technique_name = MITRE_MAP.get(alert_type, ("", "", ""))
-    alert["severity"] = severity
     alert["mitre_technique_id"] = technique_id
     alert["mitre_tactic"] = tactic
     alert["mitre_technique_name"] = technique_name
@@ -705,6 +714,10 @@ def build_alerts(
     protocol_anomalies=None,
     malicious_ja3_findings=None,
     malicious_ja4_findings=None,
+    icmp_candidates=None,
+    arp_anomalies=None,
+    jarm_results=None,
+    yara_hits=None,
     kerberos_rows=None,
     http_response_anomalies=None,
 ):
@@ -723,6 +736,10 @@ def build_alerts(
     protocol_anomalies = protocol_anomalies or []
     malicious_ja3_findings = malicious_ja3_findings or []
     malicious_ja4_findings = malicious_ja4_findings or []
+    icmp_candidates = icmp_candidates or []
+    arp_anomalies = arp_anomalies or []
+    jarm_results = jarm_results or []
+    yara_hits = yara_hits or []
     kerberos_rows = kerberos_rows or []
     http_response_anomalies = http_response_anomalies or []
 
@@ -924,6 +941,51 @@ def build_alerts(
             "protocol": "HTTP",
             "tcp_stream": item.get("tcp_stream"),
             "reason": item.get("reason"),
+        }))
+
+    for item in icmp_candidates:
+        alerts.append(_enrich_alert({
+            "alert_type": "ICMP_TUNNELING_CANDIDATE",
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "ICMP",
+            "reason": item.get("reason"),
+        }))
+
+    for item in arp_anomalies:
+        alerts.append(_enrich_alert({
+            "alert_type": "ARP_SPOOFING_CANDIDATE",
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "ARP",
+            "severity": item.get("severity"),
+            "reason": item.get("reason"),
+        }))
+
+    for item in jarm_results:
+        if item.get("malware_family"):
+            alerts.append(_enrich_alert({
+                "alert_type": "MALICIOUS_JARM",
+                "src_ip": "",
+                "dst_ip": item.get("dst_ip"),
+                "protocol": "TLS",
+                "reason": (
+                    f"JARM {item.get('jarm')} matches {item.get('malware_family')} "
+                    f"({item.get('intel_source')})"
+                ),
+            }))
+
+    for item in yara_hits:
+        alerts.append(_enrich_alert({
+            "alert_type": "YARA_MATCH",
+            "src_ip": "",
+            "dst_ip": "",
+            "protocol": "",
+            "severity": item.get("severity"),
+            "reason": (
+                f"YARA rule '{item.get('rule_name')}' matched "
+                f"{item.get('file_path', '')}"
+            ),
         }))
 
     alerts.sort(key=lambda a: _SEVERITY_ORDER.get(a.get("severity", "INFO"), 4))
