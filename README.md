@@ -67,6 +67,7 @@ This project uses:
 - Alerts sorted by severity descending
 - `--severity-filter` flag to control terminal display threshold
 - `--output-format html` generates a self-contained `report.html` with severity-colored alert table, stat cards, and collapsible sections — no external CSS or JS dependencies
+- `analysis_workbook.xlsx` — all non-empty CSVs consolidated into a single Excel workbook, one sheet per output file, ordered by investigative priority; compatible with Excel, Google Sheets, and Apple Numbers
 - `iocs.csv` — deduplicated IOC list (IPs, domains, URLs, SHA-256, user-agents, JA3/JA4/JA4H/JARM hashes) with optional GeoIP enrichment
 - `iocs.stix2.json` — STIX 2.1 IOC bundle for direct import into MISP, OpenCTI, or TheHive (no external dependency)
 - `timeline.csv` — chronologically sorted event timeline with MITRE technique IDs
@@ -104,6 +105,7 @@ pcap-security-toolkit/
 │   ├── dependencies.py
 │   ├── detections.py
 │   ├── dns_http_tls.py
+│   ├── excel_export.py
 │   ├── exporters.py
 │   ├── files.py
 │   ├── flows.py
@@ -127,6 +129,7 @@ pcap-security-toolkit/
 - Python 3.10+
 - TShark (Wireshark)
 - Scapy
+- `openpyxl` for Excel workbook export (`pip install openpyxl`)
 
 **Optional:**
 - `maxminddb` + GeoLite2 database for GeoIP/ASN enrichment
@@ -237,6 +240,7 @@ analyzer.py [-h] [--top N] [--case NAME]
 ```text
 output/
 └── case1/
+    ├── analysis_workbook.xlsx          ← All CSVs in one workbook (Excel/Sheets/Numbers)
     ├── alerts.csv                      ← Start here: severity + MITRE tagged
     ├── report.json                     ← Machine-readable summary
     ├── report.html                     ← Self-contained HTML report (--output-format html)
@@ -291,9 +295,10 @@ output/
 ### 1. Headline findings (< 5 min)
 - Terminal output: top CRITICAL/HIGH alerts with MITRE IDs
 - `report.html` (if generated): severity breakdown, stat cards, alert table
+- `analysis_workbook.xlsx` — open in Excel, Google Sheets, or Apple Numbers for a single-file view of all findings
 
 ### 2. Triage (5–20 min)
-- `alerts.csv` — sorted by severity; MITRE columns link to ATT&CK framework
+- `alerts.csv` (or the **alerts** sheet in the workbook) — sorted by severity; MITRE columns link to ATT&CK framework
 - `timeline.csv` — reconstruct the sequence of events
 - `iocs.csv` — extract IOCs for firewall/SIEM block rules or threat intel upload
 
