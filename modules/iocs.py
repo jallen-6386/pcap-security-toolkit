@@ -1,9 +1,9 @@
 """
 IOC extraction and deduplication.
 
-Collects IPs, domains, URLs, SHA-256 hashes, user agents, and JA3 fingerprints
-from all analysis results and outputs a deduplicated iocs.csv that can be
-imported into MISP, OpenCTI, TheHive, or a SIEM block-rule pipeline.
+Collects IPs, domains, URLs, SHA-256 hashes, user agents, JA3, JA4, and JA4H
+fingerprints from all analysis results and outputs a deduplicated iocs.csv
+that can be imported into MISP, OpenCTI, TheHive, or a SIEM block-rule pipeline.
 """
 
 from modules.utils import is_private_ip
@@ -18,12 +18,14 @@ def extract_iocs(
     carved_files: list[dict],
     alerts: list[dict],
     geoip_map: dict | None = None,
+    ja4h_rows: list[dict] | None = None,
 ) -> list[dict]:
     """
     Return a deduplicated list of IOC dicts with keys:
         ioc_type, value, source, confidence, first_seen, country_iso, asn, asn_org
     """
     geoip_map = geoip_map or {}
+    ja4h_rows = ja4h_rows or []
     iocs: dict[tuple, dict] = {}
 
     def _add(ioc_type: str, value: str, source: str, confidence: str, first_seen: str = ""):
@@ -70,18 +72,31 @@ def extract_iocs(
         if resolved_a and not is_private_ip(resolved_a):
             _add("ipv4", resolved_a, "dns_answer", "MEDIUM", ts)
 
-    # TLS SNI values and JA3 hashes
+    # TLS SNI values, JA3, and JA4 fingerprints
     for row in tls_summary:
         sni = (row.get("sni", "") or "").strip()
         ja3 = (row.get("ja3", "") or "").strip()
+        ja4 = (row.get("ja4", "") or "").strip()
+        ja4s = (row.get("ja4s", "") or "").strip()
         ts = row.get("timestamp", "")
         dst_ip = row.get("dst_ip", "")
         if sni:
             _add("domain", sni, "tls_sni", "MEDIUM", ts)
         if ja3:
-            _add("ja3_fingerprint", ja3, "tls_handshake", "MEDIUM", ts)
+            _add("ja3_fingerprint", ja3, "tls_handshake_ja3", "MEDIUM", ts)
+        if ja4:
+            _add("ja4_fingerprint", ja4, "tls_handshake_ja4", "MEDIUM", ts)
+        if ja4s:
+            _add("ja4s_fingerprint", ja4s, "tls_handshake_ja4s", "LOW", ts)
         if dst_ip and not is_private_ip(dst_ip):
             _add("ipv4", dst_ip, "tls_session", "LOW", ts)
+
+    # JA4H fingerprints from HTTP streams
+    for row in ja4h_rows:
+        ja4h = (row.get("ja4h", "") or "").strip()
+        ts = ""
+        if ja4h:
+            _add("ja4h_fingerprint", ja4h, "http_stream_ja4h", "MEDIUM", ts)
 
     # HTTP URLs and user agents
     for row in http_rows:

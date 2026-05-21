@@ -31,7 +31,7 @@ This project uses:
 ### Protocol Extraction (TShark)
 - HTTP requests and responses (including response codes and server headers)
 - DNS queries with A/AAAA/CNAME answers and TTL
-- TLS metadata: SNI, cipher suite, JA3/JA3S fingerprints, certificate details
+- TLS metadata: SNI, cipher suite, JA3/JA3S and JA4/JA4S fingerprints, certificate details
 - SMB file and path indicators
 - FTP RETR/STOR command extraction
 - SMTP/IMAP/POP3 commands and authentication
@@ -49,6 +49,7 @@ This project uses:
 | Suspicious downloads (ext, content-type, signature) | `SUSPICIOUS_DOWNLOAD` | T1105 |
 | TLS SNI anomalies (long, hex-like, suspicious TLDs) | `TLS_SNI_ANOMALY` | T1071.001 |
 | Malicious JA3 fingerprints (9 known families) | `MALICIOUS_JA3` | T1071.001 |
+| Malicious JA4 fingerprints (5 known C2 families) | `MALICIOUS_JA4` | T1071.001 |
 | Suspicious user agents (tools, empty, malware-assoc.) | `SUSPICIOUS_USER_AGENT` | T1071.001 |
 | Protocol on non-standard port | `PROTOCOL_ANOMALY` | T1571 |
 | Internal SMB lateral spread | `LATERAL_MOVEMENT_CANDIDATE` | T1021.002 |
@@ -62,7 +63,7 @@ This project uses:
 - Alerts sorted by severity descending
 - `--severity-filter` flag to control terminal display threshold
 - `--output-format html` generates a self-contained `report.html` with severity-colored alert table, stat cards, and collapsible sections — no external CSS or JS dependencies
-- `iocs.csv` — deduplicated IOC list (IPs, domains, URLs, SHA-256, user-agents, JA3 hashes) with optional GeoIP enrichment
+- `iocs.csv` — deduplicated IOC list (IPs, domains, URLs, SHA-256, user-agents, JA3/JA4/JA4H hashes) with optional GeoIP enrichment
 - `timeline.csv` — chronologically sorted event timeline with MITRE technique IDs
 - Optional GeoIP/ASN enrichment via `maxminddb` and GeoLite2 database
 
@@ -239,6 +240,8 @@ output/
     ├── tls_metadata.csv
     ├── tls_sni_anomalies.csv
     ├── malicious_ja3.csv
+    ├── malicious_ja4.csv
+    ├── ja4h.csv
     ├── smb_tshark.csv
     ├── ftp_tshark.csv
     ├── smtp_activity.csv
@@ -302,13 +305,22 @@ Aggregated findings with these columns:
 
 ### iocs.csv
 Deduplicated indicators:
-- `ioc_type` — ipv4, domain, url, sha256, user_agent, ja3_fingerprint
+- `ioc_type` — ipv4, domain, url, sha256, user_agent, ja3_fingerprint, ja4_fingerprint, ja4s_fingerprint, ja4h_fingerprint
 - `value`, `source`, `confidence`, `first_seen`
 - `country_iso`, `asn`, `asn_org` (if GeoIP enabled)
 
 ### malicious_ja3.csv
 TLS sessions matching known-malicious JA3 fingerprints:
 - Cobalt Strike, Metasploit Meterpreter, Dridex, Trickbot, Emotet, AgentTesla, AsyncRAT, njRAT, Mirai
+
+### malicious_ja4.csv
+TLS sessions matching known-malicious JA4 fingerprints:
+- Cobalt Strike Beacon, Metasploit Meterpreter, Sliver C2, Brute Ratel C4, Havoc C2
+
+### ja4h.csv
+HTTP client fingerprints computed from exported TCP streams (requires `--export-streams`):
+- `ja4h` — JA4H fingerprint per HTTP request
+- `tcp_stream`, `src_ip`, `src_port`, `dst_ip`, `dst_port`, `http_method`, `http_host`, `http_uri`
 
 ### dns_tunneling_candidates.csv
 Flagged on any of:
@@ -413,4 +425,4 @@ Install Wireshark/TShark and ensure it is in your PATH. The toolkit also auto-de
 - Additional Kerberos attack pattern signatures (AS-REP roasting scoring)
 - Deeper multipart body parsing
 - STIX 2.1 IOC export format
-- Expanded JA3 threat intel database
+- Expanded JA3/JA4 threat intel database

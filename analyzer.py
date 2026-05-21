@@ -2,7 +2,7 @@
 
 """
 PCAP Security Toolkit
-Version: 2.0.0
+Version: 2.1.0
 """
 
 import argparse
@@ -42,7 +42,13 @@ from modules.files import build_http_body_previews, extract_file_indicators
 from modules.flows import analyze_flows
 from modules.geoip import GeoIPEnricher, enrich_ips
 from modules.html_report import generate_html_report
-from modules.https_metadata import detect_malicious_ja3, extract_tls_metadata, summarize_tls_rows
+from modules.https_metadata import (
+    detect_malicious_ja3,
+    detect_malicious_ja4,
+    extract_tls_metadata,
+    summarize_tls_rows,
+)
+from modules.ja4 import compute_ja4h_rows, enrich_tls_summary_with_ja4
 from modules.iocs import extract_iocs
 from modules.payloads import (
     carve_files_from_raw_streams,
@@ -111,6 +117,8 @@ def print_report_summary(report: dict, alerts: list[dict], severity_filter: str)
     print(f"Lateral Movement Hits:      {report.get('lateral_movement_count', 0)}")
     print(f"Protocol Anomalies:         {report.get('protocol_anomaly_count', 0)}")
     print(f"Malicious JA3 Hits:         {report.get('malicious_ja3_count', 0)}")
+    print(f"Malicious JA4 Hits:         {report.get('malicious_ja4_count', 0)}")
+    print(f"JA4H Fingerprints:          {report.get('ja4h_count', 0)}")
     print(f"HTTP Response Anomalies:    {report.get('http_response_anomaly_count', 0)}")
     print(f"Carved Files:               {report.get('carved_file_count', 0)}")
     print(f"IOCs Extracted:             {report.get('ioc_count', 0)}")
@@ -364,7 +372,7 @@ def main():
     case_output_dir = get_case_output_dir(OUTPUT_DIR, args.case)
 
     print("=" * 70)
-    print("PCAP SECURITY TOOLKIT v2.0.0")
+    print("PCAP SECURITY TOOLKIT v2.1.0")
     print("=" * 70)
 
     # ------------------------------------------------------------------
@@ -407,6 +415,8 @@ def main():
     lateral_movement_candidates = []
     protocol_anomaly_findings = []
     malicious_ja3_findings = []
+    malicious_ja4_findings = []
+    ja4h_rows = []
     http_response_anomalies = []
 
     # ------------------------------------------------------------------
@@ -488,6 +498,9 @@ def main():
                 case_output_dir, streams_dir, tcp_stream_rows
             )
 
+            print("[*] Computing JA4H HTTP fingerprints from streams")
+            ja4h_rows = compute_ja4h_rows(streams_dir, tcp_stream_rows)
+
     else:
         print("[!] TShark not found — skipping TShark-assisted extraction.")
 
@@ -514,10 +527,13 @@ def main():
         entropy_exfil_candidates = detect_entropy_exfil_candidates(extracted_payloads)
 
     if tls_summary:
+        print("[*] Enriching TLS metadata with JA4 fingerprints")
+        enrich_tls_summary_with_ja4(tls_summary, pcap_path)
         print("[*] Detecting TLS SNI anomalies")
         tls_sni_anomalies = detect_tls_sni_anomalies(tls_summary)
-        print("[*] Detecting malicious JA3 fingerprints")
+        print("[*] Detecting malicious JA3/JA4 fingerprints")
         malicious_ja3_findings = detect_malicious_ja3(tls_summary)
+        malicious_ja4_findings = detect_malicious_ja4(tls_summary)
 
     if dns_rows:
         print("[*] Detecting DNS tunneling candidates")
@@ -579,6 +595,7 @@ def main():
         lateral_movement_candidates=lateral_movement_candidates,
         protocol_anomalies=protocol_anomaly_findings,
         malicious_ja3_findings=malicious_ja3_findings,
+        malicious_ja4_findings=malicious_ja4_findings,
         kerberos_rows=kerberos_rows,
         http_response_anomalies=http_response_anomalies,
     )
@@ -596,6 +613,7 @@ def main():
         carved_files=carved_files,
         alerts=alerts,
         geoip_map=geoip_map,
+        ja4h_rows=ja4h_rows,
     )
 
     # ------------------------------------------------------------------
@@ -650,6 +668,8 @@ def main():
         "lateral_movement_count": len(lateral_movement_candidates),
         "protocol_anomaly_count": len(protocol_anomaly_findings),
         "malicious_ja3_count": len(malicious_ja3_findings),
+        "malicious_ja4_count": len(malicious_ja4_findings),
+        "ja4h_count": len(ja4h_rows),
         "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
         "ioc_count": len(iocs),
@@ -671,6 +691,8 @@ def main():
     write_csv(case_output_dir / "tls_metadata.csv", tls_summary)
     write_csv(case_output_dir / "tls_sni_anomalies.csv", tls_sni_anomalies)
     write_csv(case_output_dir / "malicious_ja3.csv", malicious_ja3_findings)
+    write_csv(case_output_dir / "malicious_ja4.csv", malicious_ja4_findings)
+    write_csv(case_output_dir / "ja4h.csv", ja4h_rows)
     write_csv(case_output_dir / "smb_tshark.csv", smb_rows)
     write_csv(case_output_dir / "ftp_tshark.csv", ftp_rows)
     write_csv(case_output_dir / "smtp_activity.csv", smtp_rows)

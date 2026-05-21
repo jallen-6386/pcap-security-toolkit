@@ -87,6 +87,7 @@ MITRE_MAP = {
     "LATERAL_MOVEMENT_CANDIDATE":         ("T1021.002","Lateral Movement",      "Remote Services: SMB/Windows Admin Shares"),
     "INTERNAL_SCAN_CANDIDATE":            ("T1046",    "Discovery",             "Network Service Discovery"),
     "MALICIOUS_JA3":                      ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
+    "MALICIOUS_JA4":                      ("T1071.001","Command and Control",   "Application Layer Protocol: Web Protocols"),
     "KERBEROS_ANOMALY":                   ("T1558",    "Credential Access",     "Steal or Forge Kerberos Tickets"),
     "EMAIL_ACTIVITY":                     ("T1048",    "Exfiltration",          "Exfiltration Over Alternative Protocol"),
     "HTTP_RESPONSE_ANOMALY":              ("T1105",    "Command and Control",   "Ingress Tool Transfer"),
@@ -95,6 +96,7 @@ MITRE_MAP = {
 ALERT_SEVERITY_MAP = {
     "CREDENTIAL_POST_RECONSTRUCTED":      "CRITICAL",
     "MALICIOUS_JA3":                      "CRITICAL",
+    "MALICIOUS_JA4":                      "CRITICAL",
     "DNS_TUNNELING_CANDIDATE":            "HIGH",
     "CREDENTIAL_INDICATOR":               "HIGH",
     "ENTROPY_BASED_EXFIL_CANDIDATE":      "HIGH",
@@ -702,6 +704,7 @@ def build_alerts(
     lateral_movement_candidates=None,
     protocol_anomalies=None,
     malicious_ja3_findings=None,
+    malicious_ja4_findings=None,
     kerberos_rows=None,
     http_response_anomalies=None,
 ):
@@ -719,6 +722,7 @@ def build_alerts(
     lateral_movement_candidates = lateral_movement_candidates or []
     protocol_anomalies = protocol_anomalies or []
     malicious_ja3_findings = malicious_ja3_findings or []
+    malicious_ja4_findings = malicious_ja4_findings or []
     kerberos_rows = kerberos_rows or []
     http_response_anomalies = http_response_anomalies or []
 
@@ -883,6 +887,16 @@ def build_alerts(
     for item in malicious_ja3_findings:
         alerts.append(_enrich_alert({
             "alert_type": "MALICIOUS_JA3",
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "TLS",
+            "tcp_stream": item.get("tcp_stream"),
+            "reason": item.get("reason"),
+        }))
+
+    for item in malicious_ja4_findings:
+        alerts.append(_enrich_alert({
+            "alert_type": "MALICIOUS_JA4",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
             "protocol": "TLS",
