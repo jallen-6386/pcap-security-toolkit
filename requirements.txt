@@ -1,4 +1,5 @@
 scapy
+openpyxl
 
 # Optional: GeoIP/ASN enrichment
 # Requires a GeoLite2 .mmdb database file (free from https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)

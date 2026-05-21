@@ -55,6 +55,7 @@ from modules.icmp_tunnel import detect_icmp_tunneling
 from modules.jarm import probe_observed_servers
 from modules.os_fingerprint import fingerprint_hosts
 from modules.smtp_attachments import extract_smtp_attachments
+from modules.excel_export import build_excel_workbook
 from modules.stix_export import export_stix_bundle
 from modules.yara_scanner import load_rules, scan_files, yara_available
 from modules.payloads import (
@@ -811,6 +812,14 @@ def main():
         case_output_dir / "extracted_payloads_index.csv",
         extracted_payloads,
     )
+
+    # Excel workbook — consolidates all non-empty CSVs into one file
+    print("[*] Building Excel workbook")
+    wb_path = build_excel_workbook(case_output_dir)
+    if wb_path:
+        print(f"[+] Excel workbook: {wb_path}")
+    else:
+        print("[!] Excel workbook skipped — install openpyxl: pip install openpyxl")
 
     # Optional HTML report
     if args.output_format in {"html", "both"}:
