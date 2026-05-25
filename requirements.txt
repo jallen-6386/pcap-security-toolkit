@@ -1,16 +1,10 @@
 scapy
 openpyxl
 customtkinter
-
-# Optional: drag-and-drop support in the GUI
-# Install with: pip install tkinterdnd2
-# tkinterdnd2
+tkinterdnd2
+yara-python
 
 # Optional: GeoIP/ASN enrichment
 # Requires a GeoLite2 .mmdb database file (free from https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)
 # Install with: pip install maxminddb
 # maxminddb
-
-# Optional: YARA rule scanning for carved files and extracted payloads
-# Install with: pip install yara-python
-# yara-python

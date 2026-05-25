@@ -132,13 +132,15 @@ pcap-security-toolkit/
 - Python 3.10+
 - TShark (Wireshark)
 - Scapy
-- `openpyxl` for Excel workbook export (`pip install openpyxl`)
-- `customtkinter` for the desktop GUI (`pip install customtkinter`)
+- `openpyxl` for Excel workbook export
+- `customtkinter` for the desktop GUI
+- `tkinterdnd2` for drag-and-drop PCAP support in the GUI
+- `yara-python` for YARA rule scanning
+
+All Python requirements are installed automatically by `bootstrap.py`.
 
 **Optional:**
-- `tkinterdnd2` for drag-and-drop PCAP support in the GUI (`pip install tkinterdnd2`)
 - `maxminddb` + GeoLite2 database for GeoIP/ASN enrichment
-- `yara-python` for YARA rule scanning (`pip install yara-python`)
 
 ---
 
