@@ -76,7 +76,7 @@ This project uses:
 ### Payload Analysis
 - Passive OS fingerprinting from TCP SYN characteristics (TTL, window size, MSS)
 - SMTP attachment extraction and hashing from exported streams
-- YARA rule scanning on carved files and extracted payloads (optional `yara-python`)
+- YARA rule scanning on carved files and extracted payloads
 - Active JARM TLS server fingerprinting with known C2 hash lookup (`--jarm-probe`)
 - TCP stream export in ASCII and RAW modes
 - HTTP payload extraction from reconstructable plaintext streams
@@ -213,7 +213,7 @@ gui.bat
 ```
 
 **Features:**
-- Drag-and-drop PCAP files (requires `tkinterdnd2`) or click Browse
+- Drag-and-drop PCAP files or click Browse
 - Toggle switches for `--export-streams`, `--jarm-probe`, `--yara-rules`, `--geoip-db`
 - Output format selector (CSV + Excel / HTML / Both)
 - Severity-filter dropdown
