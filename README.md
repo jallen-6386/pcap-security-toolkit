@@ -96,8 +96,11 @@ pcap-security-toolkit/
 ├── requirements.txt
 ├── bootstrap.py
 ├── analyzer.py
+├── gui.py
 ├── run.sh
 ├── run.bat
+├── gui.sh
+├── gui.bat
 ├── config.py
 ├── modules/
 │   ├── __init__.py
@@ -130,8 +133,10 @@ pcap-security-toolkit/
 - TShark (Wireshark)
 - Scapy
 - `openpyxl` for Excel workbook export (`pip install openpyxl`)
+- `customtkinter` for the desktop GUI (`pip install customtkinter`)
 
 **Optional:**
+- `tkinterdnd2` for drag-and-drop PCAP support in the GUI (`pip install tkinterdnd2`)
 - `maxminddb` + GeoLite2 database for GeoIP/ASN enrichment
 - `yara-python` for YARA rule scanning (`pip install yara-python`)
 
@@ -188,6 +193,35 @@ Place the `.mmdb` file in the project root, or pass it via `--geoip-db`.
 ```bash
 run.bat "C:\path\to\file.pcapng"
 ```
+
+---
+
+## Desktop GUI
+
+For analysts who prefer a point-and-click workflow, the toolkit ships with a minimalist desktop frontend (`gui.py`) that wraps the CLI.  It exposes every flag as a toggle, streams analyzer output in real time with color-coded log lines, and presents a summary card at completion with quick buttons to open the output folder, Excel workbook, or HTML report.
+
+**macOS / Linux**
+```bash
+./gui.sh
+```
+
+**Windows**
+```bash
+gui.bat
+```
+
+**Features:**
+- Drag-and-drop PCAP files (requires `tkinterdnd2`) or click Browse
+- Toggle switches for `--export-streams`, `--jarm-probe`, `--yara-rules`, `--geoip-db`
+- Output format selector (CSV + Excel / HTML / Both)
+- Severity-filter dropdown
+- Live streaming log with color-coded `[*]`/`[!]`/`[+]` lines
+- Summary card with severity breakdown, top alerts (with MITRE IDs), and detection counts
+- One-click "Open Folder" / "Open Excel Workbook" / "Open HTML Report" buttons
+- System / dark / light theme toggle
+- Cancel button to terminate a running analysis
+
+The CLI workflow is unchanged — the GUI is purely additive and subprocesses `analyzer.py`.
 
 ---
 
