@@ -22,6 +22,10 @@ This project uses:
 
 ## Features
 
+### Interfaces
+- Command-line interface (`analyzer.py`) — scriptable, suited for batch processing and SIEM/SOAR pipelines
+- Desktop GUI (`gui.py`) — minimalist customtkinter frontend with drag-and-drop, live streaming log, and a completion summary card
+
 ### Traffic Analysis
 - Memory-efficient streaming packet loading via `PcapReader` — handles large PCAPs without loading fully into RAM
 - IPv4 and IPv6 flow analysis
@@ -104,6 +108,7 @@ pcap-security-toolkit/
 ├── config.py
 ├── modules/
 │   ├── __init__.py
+│   ├── arp_detection.py
 │   ├── cases.py
 │   ├── dependencies.py
 │   ├── detections.py
@@ -115,12 +120,21 @@ pcap-security-toolkit/
 │   ├── geoip.py
 │   ├── html_report.py
 │   ├── https_metadata.py
+│   ├── icmp_tunnel.py
 │   ├── iocs.py
+│   ├── ja4.py
+│   ├── jarm.py
+│   ├── os_fingerprint.py
 │   ├── payloads.py
 │   ├── protocol_anomalies.py
+│   ├── smtp_attachments.py
+│   ├── stix_export.py
 │   ├── streams.py
 │   ├── tshark_extract.py
-│   └── utils.py
+│   ├── utils.py
+│   └── yara_scanner.py
+├── rules/
+│   └── suspicious_strings.yar
 ├── output/
 └── samples/
 ```
@@ -235,6 +249,8 @@ analyzer.py [-h] [--top N] [--case NAME]
             [--severity-filter {CRITICAL,HIGH,MEDIUM,LOW,INFO}]
             [--output-format {csv,html,both}]
             [--geoip-db PATH]
+            [--yara-rules PATH]
+            [--jarm-probe]
             pcap
 ```
 
@@ -267,6 +283,10 @@ analyzer.py [-h] [--top N] [--case NAME]
 
 # With GeoIP enrichment
 ./run.sh "/path/to/capture.pcapng" --geoip-db ./GeoLite2-ASN.mmdb --output-format both
+
+# Full malware-hunting profile: stream export, YARA, and JARM probing
+./run.sh "/path/to/capture.pcapng" --case incident_42 --export-streams \
+    --yara-rules ./rules --jarm-probe --output-format both
 ```
 
 ---
@@ -393,6 +413,48 @@ Flagged on any of:
 - `LATERAL_MOVEMENT_CANDIDATE` — single host connected to 3+ internal targets via SMB (port 445)
 - `INTERNAL_SCAN_CANDIDATE` — small TCP connections to 10+ internal IPs or across 10+ ports
 
+### jarm_fingerprints.csv
+Active TLS server fingerprints generated when `--jarm-probe` is set:
+- 62-character JARM hash per `(dst_ip, dst_port)` observed in TLS metadata
+- Hits against a small built-in C2 hash table (Cobalt Strike, Merlin, Covenant, AsyncRAT)
+- Skips private IPs; requires outbound network connectivity from the host running the toolkit
+
+### icmp_tunneling_candidates.csv
+ICMP covert-channel indicators:
+- Echo/Echo-Reply pairs with payloads > 64 bytes
+- High-volume ICMP between a single source/destination pair (> 100 packets)
+- Non-standard ICMP types
+
+### arp_anomalies.csv
+- IP↔MAC conflicts (HIGH — possible ARP cache poisoning, T1557.002)
+- Gratuitous ARP flooding from a single source (MEDIUM)
+
+### os_fingerprints.csv
+Passive OS guesses for each unique source IP based on the first observed TCP SYN:
+- TTL, TCP window size, MSS, and window-scale signature match against a small p0f-style table
+- Covers Windows 7/8/10/11/Server, Linux 2.4/2.6/4.x/5.x, macOS/iOS, FreeBSD, OpenBSD, Android, Cisco IOS, Solaris
+
+### smtp_attachments.csv
+MIME attachments extracted from SMTP DATA sections in exported streams:
+- `filename`, `content_type`, `size_bytes`, `sha256`, `tcp_stream`, saved file path
+- Attachments are saved under `smtp_attachments/` inside the case directory
+
+### yara_hits.csv
+Matches from `--yara-rules` scanning over carved files, extracted payloads, and SMTP attachments:
+- `rule`, `tags`, `severity` (from rule meta or tags), `matched_strings`, target file path, sha256
+
+### iocs.stix2.json
+STIX 2.1 bundle containing one Indicator object per IOC, ready for import into MISP, OpenCTI, or TheHive. Indicator IDs are deterministic across runs (UUIDv5) so the same IOC always gets the same STIX ID.
+
+### analysis_workbook.xlsx
+All non-empty CSVs consolidated into a single Excel workbook, one sheet per file, ordered by investigative priority (alerts → iocs → timeline → detections → raw protocol data). Opens natively in Microsoft Excel, Google Sheets, and Apple Numbers.
+
+### extracted_payloads_index.csv
+Index of every payload reconstructed from exported TCP streams:
+- `filename` — constructed safe name (used on disk)
+- `original_filename` — exact filename advertised in the HTTP `Content-Disposition` header, when present
+- `content_type`, `sha256`, `entropy`, `detected_file_type`, `detected_extension`, `size_bytes`, `preview`
+
 ---
 
 ## GeoIP Enrichment
@@ -421,7 +483,7 @@ The database is detected automatically in the project root, or specified with `-
 
 ```text
 ======================================================================
-PCAP SECURITY TOOLKIT v2.0.0
+PCAP SECURITY TOOLKIT v2.3.0
 ======================================================================
 Total Packets:              4128
 Total Bytes:                5873210 (5.60 MB)
@@ -481,10 +543,10 @@ Install Wireshark/TShark and ensure it is in your PATH. The toolkit also auto-de
 
 ## Future Improvements
 
-- TLS key log file support for HTTPS decryption
+- TLS key log file (SSLKEYLOGFILE) support for HTTPS decryption
+- Full HTTP/2 body reconstruction
 - Additional Kerberos attack pattern signatures (AS-REP roasting scoring)
 - Deeper multipart body parsing
-- STIX 2.1 IOC export format
-- Expanded JA3/JA4/JARM threat intel database
-- TLS key log file support for HTTPS decryption
+- Expanded JA3 / JA4 / JARM threat intel database
 - STIX 2.1 relationship objects (Indicator → Malware / Infrastructure)
+- Bundled GUI distribution (PyInstaller `.app` / `.exe`) for analysts without Python installed
