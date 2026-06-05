@@ -7,6 +7,7 @@ Version: 2.2.0
 
 import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 try:
@@ -19,7 +20,7 @@ except ImportError:
     print("    python -m pip install -r requirements.txt --no-user")
     sys.exit(1)
 
-from config import OUTPUT_DIR
+from config import OUTPUT_DIR, TSHARK_MAX_WORKERS
 from modules.cases import get_case_output_dir
 from modules.dependencies import has_tshark
 from modules.detections import (
@@ -36,10 +37,9 @@ from modules.detections import (
     find_credential_indicators,
     reconstruct_credential_posts,
 )
-from modules.dns_http_tls import analyze_dns_http_tls
 from modules.exporters import write_csv, write_json
 from modules.files import build_http_body_previews, extract_file_indicators
-from modules.flows import analyze_flows
+from modules.flows import analyze_packets
 from modules.geoip import GeoIPEnricher, enrich_ips
 from modules.html_report import generate_html_report
 from modules.https_metadata import (
@@ -404,13 +404,11 @@ def main():
     # ------------------------------------------------------------------
     # Packet-level analysis — two streaming passes to avoid loading into RAM
     # ------------------------------------------------------------------
-    print(f"[*] Loading and analyzing flows from {pcap_path}")
+    print(f"[*] Loading and analyzing flows + DNS/HTTP from {pcap_path}")
     with PcapReader(str(pcap_path)) as reader:
-        flow_data = analyze_flows(reader)
-
-    print("[*] Analyzing DNS/HTTP")
-    with PcapReader(str(pcap_path)) as reader:
-        protocol_data = analyze_dns_http_tls(reader)
+        combined = analyze_packets(reader)
+    flow_data = combined["flow"]
+    protocol_data = combined["protocol"]
 
     # ------------------------------------------------------------------
     # Initialize result containers
@@ -458,18 +456,44 @@ def main():
     # TShark-assisted extraction
     # ------------------------------------------------------------------
     if has_tshark():
-        print("[*] Running TShark extraction")
-        http_rows, http_err = extract_http_fields(pcap_path)
-        http_response_rows, http_resp_err = extract_http_response_fields(pcap_path)
-        dns_rows, dns_err = extract_dns_fields(pcap_path)
-        smb_rows, smb_err = extract_smb_fields(pcap_path)
-        ftp_rows, ftp_err = extract_ftp_fields(pcap_path)
-        smtp_rows, smtp_err = extract_smtp_fields(pcap_path)
-        kerberos_rows, kerb_err = extract_kerberos_fields(pcap_path)
+        # Each extractor is an independent full-file TShark pass. They share no
+        # state, so we run them concurrently — on large captures this turns a
+        # dozen serial reads into a handful of parallel ones.
+        print(f"[*] Running TShark extraction ({TSHARK_MAX_WORKERS} parallel workers)")
+        extractors = {
+            "http":         extract_http_fields,
+            "http_resp":    extract_http_response_fields,
+            "dns":          extract_dns_fields,
+            "smb":          extract_smb_fields,
+            "ftp":          extract_ftp_fields,
+            "smtp":         extract_smtp_fields,
+            "kerberos":     extract_kerberos_fields,
+            "icmp":         extract_icmp_fields,
+            "arp":          extract_arp_fields,
+            "syn":          extract_tcp_syn_fields,
+            "stream_index": extract_tcp_stream_index,
+            "tls":          extract_tls_metadata,
+        }
+        extraction_results: dict = {}
+        with ThreadPoolExecutor(max_workers=TSHARK_MAX_WORKERS) as executor:
+            future_to_name = {
+                executor.submit(fn, pcap_path): name for name, fn in extractors.items()
+            }
+            for future in as_completed(future_to_name):
+                extraction_results[future_to_name[future]] = future.result()
 
-        icmp_rows, icmp_err = extract_icmp_fields(pcap_path)
-        arp_rows, arp_err = extract_arp_fields(pcap_path)
-        syn_rows, syn_err = extract_tcp_syn_fields(pcap_path)
+        http_rows, http_err = extraction_results["http"]
+        http_response_rows, http_resp_err = extraction_results["http_resp"]
+        dns_rows, dns_err = extraction_results["dns"]
+        smb_rows, smb_err = extraction_results["smb"]
+        ftp_rows, ftp_err = extraction_results["ftp"]
+        smtp_rows, smtp_err = extraction_results["smtp"]
+        kerberos_rows, kerb_err = extraction_results["kerberos"]
+        icmp_rows, icmp_err = extraction_results["icmp"]
+        arp_rows, arp_err = extraction_results["arp"]
+        syn_rows, syn_err = extraction_results["syn"]
+        tcp_stream_rows, stream_err = extraction_results["stream_index"]
+        tls_rows, tls_err = extraction_results["tls"]
 
         for label, err in [
             ("HTTP request", http_err),
@@ -482,22 +506,15 @@ def main():
             ("ICMP", icmp_err),
             ("ARP", arp_err),
             ("TCP SYN", syn_err),
+            ("TCP stream index", stream_err),
+            ("TLS metadata", tls_err),
         ]:
             if err:
                 print(f"[!] {label} TShark extraction warning: {err}")
 
-        print("[*] Extracting TCP stream index")
-        tcp_stream_rows, stream_err = extract_tcp_stream_index(pcap_path)
-        if stream_err:
-            print(f"[!] TCP stream extraction warning: {stream_err}")
-
         if tcp_stream_rows:
             stream_ids = get_unique_tcp_stream_ids(tcp_stream_rows)
 
-        print("[*] Extracting TLS metadata")
-        tls_rows, tls_err = extract_tls_metadata(pcap_path)
-        if tls_err:
-            print(f"[!] TLS metadata extraction warning: {tls_err}")
         if tls_rows:
             tls_summary = summarize_tls_rows(tls_rows)
 
@@ -511,10 +528,29 @@ def main():
             streams_dir.mkdir(parents=True, exist_ok=True)
 
             export_stream_ids = stream_ids[: args.max_streams]
-            print(f"[*] Exporting up to {len(export_stream_ids)} TCP streams (ascii + raw)")
+            print(
+                f"[*] Exporting up to {len(export_stream_ids)} TCP streams "
+                f"(ascii + raw, {TSHARK_MAX_WORKERS} parallel workers)"
+            )
+
+            # Each follow is its own full-file pass; run them concurrently and
+            # write the results out afterward in deterministic order.
+            follow_tasks = [
+                (sid, mode) for sid in export_stream_ids for mode in ("ascii", "raw")
+            ]
+            follow_results: dict = {}
+            with ThreadPoolExecutor(max_workers=TSHARK_MAX_WORKERS) as executor:
+                future_to_task = {
+                    executor.submit(export_follow_stream, pcap_path, sid, mode): (sid, mode)
+                    for sid, mode in follow_tasks
+                }
+                for future in as_completed(future_to_task):
+                    follow_results[future_to_task[future]] = future.result()
 
             for stream_id in export_stream_ids:
-                ascii_content, ascii_err = export_follow_stream(pcap_path, stream_id, mode="ascii")
+                ascii_content, ascii_err = follow_results.get(
+                    (stream_id, "ascii"), (None, "no result")
+                )
                 if ascii_content is not None:
                     (streams_dir / f"tcp_stream_{stream_id}.ascii.txt").write_text(
                         ascii_content, encoding="utf-8", errors="replace"
@@ -522,7 +558,9 @@ def main():
                 else:
                     print(f"[!] Failed to export tcp.stream {stream_id} ascii: {ascii_err}")
 
-                raw_content, raw_err = export_follow_stream(pcap_path, stream_id, mode="raw")
+                raw_content, raw_err = follow_results.get(
+                    (stream_id, "raw"), (None, "no result")
+                )
                 if raw_content is not None:
                     (streams_dir / f"tcp_stream_{stream_id}.raw.txt").write_text(
                         raw_content, encoding="utf-8", errors="replace"

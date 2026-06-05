@@ -1,7 +1,9 @@
 import os
 import shutil
+from functools import lru_cache
 
 
+@lru_cache(maxsize=1)
 def find_tshark() -> str | None:
     tshark = shutil.which("tshark")
     if tshark:

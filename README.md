@@ -469,6 +469,22 @@ The database is detected automatically in the project root, or specified with `-
 
 ---
 
+## Performance
+
+The toolkit is built to handle large captures (300,000+ packets) without loading the whole file into RAM:
+
+- **Streaming packet analysis** — Scapy's `PcapReader` yields packets one at a time; the file is never fully materialized in memory.
+- **Single-pass packet analysis** — flow statistics and DNS/HTTP summaries are computed in one combined iteration rather than two separate passes over the capture.
+- **Parallel TShark extraction** — the independent per-protocol extraction passes (HTTP, DNS, TLS, SMB, FTP, SMTP, Kerberos, ICMP, ARP, TCP SYN, stream index) run concurrently instead of serially. The worker count defaults to the number of CPU cores (capped at 8) and is configurable via `TSHARK_MAX_WORKERS` in `config.py`.
+- **Parallel stream export** — when `--export-streams` is set, the per-stream follow passes are also run concurrently.
+
+**Tuning tips for very large captures:**
+- `--export-streams` adds two TShark follow passes per stream. Keep `--max-streams` modest (default 25) on large files; raise it only when you need deeper payload coverage.
+- `--jarm-probe` makes live outbound network connections and is the slowest optional step — enable it only when you intend to fingerprint observed servers.
+- Lower `TSHARK_MAX_WORKERS` if running on a memory-constrained host, or raise it on a many-core workstation.
+
+---
+
 ## Current Limitations
 
 - Full HTTP/2 body reconstruction is not supported
