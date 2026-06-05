@@ -96,6 +96,7 @@ This project uses:
 - Optional GeoIP/ASN enrichment via `maxminddb` and GeoLite2 database
 
 ### Payload Analysis
+- HTTP object export (`--export-objects http`): reconstructs files transferred over HTTP, correctly handling chunked encoding and gzip/deflate compression that raw-stream carving cannot, then hashes and fingerprints each (requires `--export-streams`)
 - TCP stream triage: streams ranked by a composite suspicion score (content signals, direction, volume, TCP health) so the most interesting sessions surface first
 - Passive OS fingerprinting from TCP SYN characteristics (TTL, window size, MSS)
 - SMTP attachment extraction and hashing from exported streams
@@ -141,6 +142,7 @@ pcap-security-toolkit/
 │   ├── flows.py
 │   ├── geoip.py
 │   ├── html_report.py
+│   ├── http_objects.py
 │   ├── https_metadata.py
 │   ├── icmp_tunnel.py
 │   ├── iocs.py
@@ -374,8 +376,10 @@ output/
     ├── protocol_anomalies.csv
     ├── carved_files.csv
     ├── extracted_payloads_index.csv
+    ├── http_objects.csv                ← HTTP files (chunked/gzip-decoded)
     ├── extracted_payloads/
     ├── carved_files/
+    ├── http_objects/
     └── streams/
         ├── tcp_stream_0.ascii.txt
         └── tcp_stream_0.raw.txt
@@ -405,6 +409,7 @@ output/
 - `stream_triage.csv` — start with the highest-scoring streams, then pull their content from `streams/`
 - `extracted_payloads_index.csv` + `extracted_payloads/`
 - `carved_files.csv` + `carved_files/`
+- `http_objects.csv` + `http_objects/` (HTTP files, chunked/gzip-decoded)
 - `credential_findings.csv` + `credential_posts.csv`
 - `beaconing_candidates.csv` + `entropy_exfil_candidates.csv`
 - `lateral_movement_candidates.csv` + `protocol_anomalies.csv`
@@ -469,6 +474,11 @@ Forensic records of Windows authentication and RPC traffic:
 - `ntlm_activity.csv` — NTLM AUTHENTICATE events: `username`, `domain`, `hostname`, `has_server_challenge`, src/dst/stream. NTLM auth directed at an external host raises a `NTLM_EXTERNAL_AUTH` alert (possible relay/leak).
 - `ldap_activity.csv` — LDAP bind/search operations: `operation`, `bind_dn`, `auth_type`, `base_object`, `result_code`. A cleartext simple bind raises `LDAP_CLEARTEXT_BIND` (HIGH); 100+ search requests from one host raises `LDAP_ENUMERATION` (MEDIUM).
 - `dcerpc_activity.csv` — binds to recognized DCERPC interfaces: `interface`, `uuid`, `mitre_technique_id`, `alert_worthy`, src/dst/stream. Rare high-signal interfaces (DRSUAPI/DCSync, MS-EFSR/PetitPotam, task scheduler) raise alerts; common-but-abusable interfaces (svcctl, samr, lsarpc, winreg, srvsvc, spoolss) are recorded with their technique label but not alerted, to keep false positives low.
+
+### http_objects.csv
+Files reconstructed by TShark's `--export-objects http` (requires `--export-streams`), saved under `http_objects/`:
+- `filename`, `saved_path`, `size_bytes`, `sha256`, `entropy`, `detected_file_type`, `detected_extension`
+- Handles chunked transfer-encoding and gzip/deflate compression that raw-stream carving cannot, so it recovers files carving would miss. Hashes feed the IOC list and the objects are scanned by YARA.
 
 ### stream_triage.csv
 TCP streams ranked by a composite **suspicion score** (highest first) so you can review the most interesting sessions before reading raw stream content:

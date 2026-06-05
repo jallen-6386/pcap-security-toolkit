@@ -786,6 +786,7 @@ class App(_Root):
             ("Carved files",         report_data.get("carved_file_count", 0)),
             ("YARA hits",            report_data.get("yara_hit_count", 0)),
             ("SMTP attachments",     report_data.get("smtp_attachment_count", 0)),
+            ("HTTP objects",         report_data.get("http_object_count", 0)),
             ("Credential findings",  report_data.get("credential_finding_count", 0)),
             ("Beaconing candidates", report_data.get("beaconing_candidate_count", 0)),
             ("DNS tunneling",        report_data.get("dns_tunneling_count", 0)),

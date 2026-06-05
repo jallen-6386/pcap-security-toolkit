@@ -21,6 +21,7 @@ def extract_iocs(
     geoip_map: dict | None = None,
     ja4h_rows: list[dict] | None = None,
     smtp_attachments: list[dict] | None = None,
+    http_objects: list[dict] | None = None,
 ) -> list[dict]:
     """
     Return a deduplicated list of IOC dicts with keys:
@@ -29,6 +30,7 @@ def extract_iocs(
     geoip_map = geoip_map or {}
     ja4h_rows = ja4h_rows or []
     smtp_attachments = smtp_attachments or []
+    http_objects = http_objects or []
     iocs: dict[tuple, dict] = {}
 
     def _add(ioc_type: str, value: str, source: str, confidence: str, first_seen: str = ""):
@@ -142,6 +144,12 @@ def extract_iocs(
         sha = (row.get("sha256", "") or "").strip()
         if sha:
             _add("sha256", sha, "smtp_attachment", "HIGH", "")
+
+    # SHA-256 hashes from exported HTTP objects
+    for row in http_objects:
+        sha = (row.get("sha256", "") or "").strip()
+        if sha:
+            _add("sha256", sha, "http_object", "HIGH", "")
 
     # External IPs from high-confidence alerts
     high_conf = {"CRITICAL", "HIGH"}

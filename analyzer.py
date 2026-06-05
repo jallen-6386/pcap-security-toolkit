@@ -98,6 +98,7 @@ from modules.auth_protocols import (
     summarize_ntlm_events,
 )
 from modules.dcerpc import detect_dcerpc_abuse, summarize_dcerpc_binds
+from modules.http_objects import export_http_objects
 from modules.stream_triage import score_streams
 from modules.utils import is_noise_ip
 
@@ -157,6 +158,7 @@ def print_report_summary(report: dict, alerts: list[dict], severity_filter: str)
     print(f"ARP Anomalies:              {report.get('arp_anomaly_count', 0)}")
     print(f"OS Fingerprints:            {report.get('os_fingerprint_count', 0)}")
     print(f"SMTP Attachments:           {report.get('smtp_attachment_count', 0)}")
+    print(f"HTTP Objects Exported:      {report.get('http_object_count', 0)}")
     print(f"YARA Hits:                  {report.get('yara_hit_count', 0)}")
     print(
         f"Expert Info Items:          {report.get('expert_info_count', 0)} "
@@ -487,6 +489,7 @@ def main():
     arp_anomalies = []
     os_fingerprints = []
     smtp_attachments_list = []
+    http_objects_list = []
     yara_hits = []
     jarm_results = []
     protocol_hierarchy_rows = []
@@ -679,6 +682,9 @@ def main():
                 streams_dir, tcp_stream_rows, case_output_dir
             )
 
+            print("[*] Exporting HTTP objects")
+            http_objects_list = export_http_objects(pcap_path, case_output_dir)
+
     else:
         print("[!] TShark not found — skipping TShark-assisted extraction.")
 
@@ -766,7 +772,10 @@ def main():
         yara_rules_compiled = load_rules(args.yara_rules)
         if yara_rules_compiled:
             print("[*] Running YARA scanning")
-            yara_targets = carved_files + extracted_payloads + smtp_attachments_list
+            yara_targets = (
+                carved_files + extracted_payloads
+                + smtp_attachments_list + http_objects_list
+            )
             yara_hits = scan_files(yara_rules_compiled, yara_targets)
         elif not yara_available():
             print("[!] YARA scanning requires: pip install yara-python")
@@ -853,6 +862,7 @@ def main():
         geoip_map=geoip_map,
         ja4h_rows=ja4h_rows,
         smtp_attachments=smtp_attachments_list,
+        http_objects=http_objects_list,
     )
 
     if args.min_ioc_confidence != "LOW":
@@ -926,6 +936,7 @@ def main():
         "arp_anomaly_count": len(arp_anomalies),
         "os_fingerprint_count": len(os_fingerprints),
         "smtp_attachment_count": len(smtp_attachments_list),
+        "http_object_count": len(http_objects_list),
         "yara_hit_count": len(yara_hits),
         "jarm_count": len(jarm_results),
         "protocol_hierarchy_count": len(protocol_hierarchy_rows),
@@ -984,6 +995,7 @@ def main():
     write_csv(case_output_dir / "arp_anomalies.csv", arp_anomalies)
     write_csv(case_output_dir / "os_fingerprints.csv", os_fingerprints)
     write_csv(case_output_dir / "smtp_attachments.csv", smtp_attachments_list)
+    write_csv(case_output_dir / "http_objects.csv", http_objects_list)
     write_csv(case_output_dir / "yara_hits.csv", yara_hits)
     write_csv(case_output_dir / "jarm_fingerprints.csv", jarm_results)
     write_csv(case_output_dir / "protocol_hierarchy.csv", protocol_hierarchy_rows)
