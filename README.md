@@ -545,7 +545,7 @@ Matches from `--yara-rules` scanning over carved files, extracted payloads, and 
 STIX 2.1 bundle containing one Indicator object per IOC, ready for import into MISP, OpenCTI, or TheHive. Indicator IDs are deterministic across runs (UUIDv5) so the same IOC always gets the same STIX ID. IOCs flagged `benign_infra` (public DNS resolvers) are excluded from the bundle — a STIX Indicator asserts malicious activity — but remain visible, annotated, in `iocs.csv`.
 
 ### analysis_workbook.xlsx
-All non-empty CSVs consolidated into a single Excel workbook, one sheet per file, ordered by investigative priority (alerts → iocs → timeline → detections → raw protocol data). Opens natively in Microsoft Excel, Google Sheets, and Apple Numbers.
+All non-empty CSVs consolidated into a single Excel workbook, one sheet per file, ordered by investigative priority (alerts → iocs → timeline → detections → raw protocol data). Opens natively in Microsoft Excel, Google Sheets, and Apple Numbers. Any sheet that would exceed Excel's 1,048,576-row limit (e.g. a per-packet index on a very large capture) is truncated with a final row pointing to the full CSV.
 
 ### extracted_payloads_index.csv
 Index of every payload reconstructed from exported TCP streams:

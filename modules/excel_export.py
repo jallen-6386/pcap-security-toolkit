@@ -9,6 +9,12 @@ analysts land on the most actionable data first.
 import csv
 from pathlib import Path
 
+# Excel's hard limit is 1,048,576 rows per sheet (row 1 is the header).
+_EXCEL_MAX_ROWS = 1_048_576
+
+# Number of data rows sampled to size columns (avoids scanning huge sheets).
+_WIDTH_SAMPLE_ROWS = 200
+
 _INVALID_SHEET_CHARS = str.maketrans("[]:*?/\\", "_______")
 
 # Sheets appear in this order; any CSV not in the list is appended alphabetically.
@@ -70,6 +76,7 @@ def build_excel_workbook(output_dir: Path) -> Path | None:
     try:
         import openpyxl
         from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
     except ImportError:
         return None
 
@@ -106,8 +113,18 @@ def build_excel_workbook(output_dir: Path) -> Path | None:
         if not data_rows:
             continue
 
-        ws = wb.create_sheet(title=_sheet_name(stem))
         header = rows[0]
+
+        # Excel can't hold more than _EXCEL_MAX_ROWS rows. If a CSV exceeds it
+        # (e.g. a per-packet index on a large capture), keep as many as fit and
+        # leave the final row as a pointer to the full CSV.
+        omitted = 0
+        if len(data_rows) > _EXCEL_MAX_ROWS - 1:
+            keep = _EXCEL_MAX_ROWS - 2  # header row + one marker row
+            omitted = len(data_rows) - keep
+            data_rows = data_rows[:keep]
+
+        ws = wb.create_sheet(title=_sheet_name(stem))
 
         for col_idx, value in enumerate(header, 1):
             cell = ws.cell(row=1, column=col_idx, value=value)
@@ -122,10 +139,22 @@ def build_excel_workbook(output_dir: Path) -> Path | None:
                 if fill:
                     cell.fill = fill
 
-        for col in ws.columns:
-            col_cells = list(col)
-            max_len = max((len(str(c.value or "")) for c in col_cells), default=0)
-            ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 2, 60)
+        if omitted:
+            ws.cell(
+                row=len(data_rows) + 2,
+                column=1,
+                value=f"... {omitted} more rows omitted (Excel row limit) — see {stem}.csv",
+            )
+
+        # Size columns from the header plus a sample of data rows, rather than
+        # scanning every cell (which is prohibitively slow on large sheets).
+        widths = [len(str(h)) for h in header]
+        for row in data_rows[:_WIDTH_SAMPLE_ROWS]:
+            for i, value in enumerate(row):
+                if i < len(widths):
+                    widths[i] = max(widths[i], len(str(value)))
+        for i, width in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = min(width + 2, 60)
 
         ws.freeze_panes = "A2"
         sheets_written += 1
