@@ -99,6 +99,7 @@ from modules.auth_protocols import (
 )
 from modules.dcerpc import detect_dcerpc_abuse, summarize_dcerpc_binds
 from modules.http_objects import export_http_objects
+from modules.tshark_config import is_valid_decode_as, set_decode_as
 from modules.stream_triage import score_streams
 from modules.utils import is_noise_ip
 
@@ -429,6 +430,14 @@ def main():
              "(default: LOW = keep all). MEDIUM removes low-value flow-only IPs, "
              "user-agents, and JA4S; HIGH keeps only corroborated indicators.",
     )
+    parser.add_argument(
+        "--decode-as",
+        action="append",
+        metavar="RULE",
+        help="Force a dissector for non-standard ports, e.g. "
+             "--decode-as tcp.port==8888,http (repeatable). Applies to all "
+             "TShark extraction, statistics, and JA4 passes.",
+    )
     args = parser.parse_args()
 
     pcap_path = Path(args.pcap)
@@ -440,6 +449,17 @@ def main():
     print("=" * 70)
     print("PCAP SECURITY TOOLKIT v2.3.0")
     print("=" * 70)
+
+    # Validate and activate decode-as rules for all TShark passes.
+    decode_as_rules = []
+    for rule in (args.decode_as or []):
+        if is_valid_decode_as(rule):
+            decode_as_rules.append(rule.strip())
+        else:
+            print(f"[!] Ignoring malformed --decode-as rule: {rule}")
+    if decode_as_rules:
+        set_decode_as(decode_as_rules)
+        print(f"[*] Decode-as rules active: {', '.join(decode_as_rules)}")
 
     # ------------------------------------------------------------------
     # Packet-level analysis — two streaming passes to avoid loading into RAM
@@ -958,6 +978,7 @@ def main():
         "alerts_count": len(alerts),
         "case_output_dir": str(case_output_dir),
         "geoip_enabled": enricher.available,
+        "decode_as_rules": decode_as_rules,
     }
 
     # ------------------------------------------------------------------

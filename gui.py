@@ -290,6 +290,17 @@ class App(_Root):
             text_color="#888888",
         ).pack(side="left", padx=10)
 
+        # Decode-as (force dissector on non-standard ports)
+        row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(row, text="Decode as:", width=110, anchor="w").pack(side="left")
+        self.decode_as_var = tk.StringVar()
+        ctk.CTkEntry(
+            row,
+            textvariable=self.decode_as_var,
+            placeholder_text="e.g. tcp.port==8888,http  (space-separate multiple rules)",
+        ).pack(side="left", fill="x", expand=True, padx=(5, 0))
+
         # Modules section header
         ctk.CTkLabel(
             self.input_frame,
@@ -586,6 +597,9 @@ class App(_Root):
         cmd += ["--output-format", self.format_var.get()]
         if self.min_ioc_conf_var.get() != "LOW":
             cmd += ["--min-ioc-confidence", self.min_ioc_conf_var.get()]
+        for rule in self.decode_as_var.get().split():
+            if rule.strip():
+                cmd += ["--decode-as", rule.strip()]
         return cmd
 
     @staticmethod

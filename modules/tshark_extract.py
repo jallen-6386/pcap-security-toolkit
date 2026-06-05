@@ -5,6 +5,7 @@ import sys
 
 from modules.dependencies import find_tshark
 from modules.tshark_capabilities import filter_available_fields
+from modules.tshark_config import decode_as_args
 
 
 def set_csv_field_limit():
@@ -27,7 +28,7 @@ def run_tshark_fields(pcap_path, fields, display_filter=None):
     # resolution for deterministic, faster offline analysis.
     usable_fields, _dropped = filter_available_fields(fields)
 
-    cmd = [tshark_path, "-n", "-r", str(pcap_path), "-T", "fields"]
+    cmd = [tshark_path, "-n", *decode_as_args(), "-r", str(pcap_path), "-T", "fields"]
 
     if display_filter:
         cmd.extend(["-Y", display_filter])

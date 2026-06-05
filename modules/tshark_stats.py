@@ -14,6 +14,7 @@ import re
 import subprocess
 
 from modules.dependencies import find_tshark
+from modules.tshark_config import decode_as_args
 
 # Known Wireshark Expert Info severity sections, mapped to our labels.
 _EXPERT_SECTIONS = {
@@ -54,7 +55,7 @@ def run_protocol_hierarchy(pcap_path):
     if not tshark:
         return [], "", "TShark not found"
 
-    cmd = [tshark, "-n", "-q", "-r", str(pcap_path), "-z", "io,phs"]
+    cmd = [tshark, "-n", *decode_as_args(), "-q", "-r", str(pcap_path), "-z", "io,phs"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
     except Exception as exc:
@@ -110,7 +111,7 @@ def run_expert_info(pcap_path):
     if not tshark:
         return [], "", "TShark not found"
 
-    cmd = [tshark, "-n", "-q", "-r", str(pcap_path), "-z", "expert"]
+    cmd = [tshark, "-n", *decode_as_args(), "-q", "-r", str(pcap_path), "-z", "expert"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
     except Exception as exc:
@@ -164,7 +165,7 @@ def run_credentials(pcap_path):
     if not tshark:
         return [], "", "TShark not found"
 
-    cmd = [tshark, "-n", "-q", "-r", str(pcap_path), "-z", "credentials"]
+    cmd = [tshark, "-n", *decode_as_args(), "-q", "-r", str(pcap_path), "-z", "credentials"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
     except Exception as exc:

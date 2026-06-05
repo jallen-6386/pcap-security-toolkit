@@ -35,6 +35,7 @@ import subprocess
 from pathlib import Path
 
 from modules.dependencies import find_tshark
+from modules.tshark_config import decode_as_args
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +240,7 @@ def extract_tls_handshake_raw_for_ja4(pcap_path) -> tuple[list[dict], str | None
     ]
 
     cmd = [
-        tshark_path, "-n", "-r", str(pcap_path),
+        tshark_path, "-n", *decode_as_args(), "-r", str(pcap_path),
         "-T", "fields",
         "-Y", "tls.handshake.type == 1 || tls.handshake.type == 2",
     ]

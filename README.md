@@ -38,6 +38,7 @@ This project uses:
 - Cleartext credential recovery (`-z credentials`) — protocol-aware extraction across FTP, HTTP basic, IMAP, POP, and SMTP
 - Version-aware field extraction — unsupported display-filter fields are detected via `tshark -G fields` and dropped before extraction, so one unavailable field (e.g. a JA4 field on older TShark) can't fail an entire pass
 - Name resolution disabled (`-n`) on all TShark calls for deterministic, faster offline analysis
+- `--decode-as` forces a dissector for traffic on non-standard ports (e.g. HTTP/TLS C2 on tcp.port 8888), applied across every extraction, statistics, and JA4 pass
 
 ### Protocol Extraction (TShark)
 - HTTP requests and responses (including response codes and server headers)
@@ -156,6 +157,7 @@ pcap-security-toolkit/
 │   ├── stream_triage.py
 │   ├── streams.py
 │   ├── tshark_capabilities.py
+│   ├── tshark_config.py
 │   ├── tshark_extract.py
 │   ├── tshark_stats.py
 │   ├── utils.py
@@ -257,7 +259,7 @@ gui.bat
 - Drag-and-drop PCAP files or click Browse
 - Toggle switches for `--export-streams`, `--jarm-probe`, `--yara-rules`, `--geoip-db`
 - Output format selector (CSV + Excel / HTML / Both)
-- Severity-filter and minimum-IOC-confidence dropdowns
+- Severity-filter and minimum-IOC-confidence dropdowns, plus a decode-as field for non-standard ports
 - Live streaming log with color-coded `[*]`/`[!]`/`[+]` lines
 - Summary card with severity breakdown, top alerts (with MITRE IDs), and detection counts
 - One-click "Open Folder" / "Open Excel Workbook" / "Open HTML Report" buttons
@@ -279,6 +281,7 @@ analyzer.py [-h] [--top N] [--case NAME]
             [--yara-rules PATH]
             [--jarm-probe]
             [--min-ioc-confidence {LOW,MEDIUM,HIGH}]
+            [--decode-as RULE]
             pcap
 ```
 
@@ -295,6 +298,7 @@ analyzer.py [-h] [--top N] [--case NAME]
 | `--yara-rules` | off | Path to a YARA rules file or directory to scan carved files and payloads |
 | `--jarm-probe` | off | Actively fingerprint observed TLS servers with JARM (requires outbound connectivity) |
 | `--min-ioc-confidence` | LOW | Drop IOCs below this confidence from iocs.csv and the STIX bundle (MEDIUM removes flow-only IPs, user-agents, JA4S; HIGH keeps only corroborated indicators) |
+| `--decode-as` | — | Force a dissector for a non-standard port, e.g. `tcp.port==8888,http` (repeatable). Applies to all TShark extraction, statistics, and JA4 passes |
 
 ---
 
@@ -316,6 +320,9 @@ analyzer.py [-h] [--top N] [--case NAME]
 # Full malware-hunting profile: stream export, YARA, and JARM probing
 ./run.sh "/path/to/capture.pcapng" --case incident_42 --export-streams \
     --yara-rules ./rules --jarm-probe --output-format both
+
+# C2 on a non-standard port: dissect tcp/8888 as HTTP and tcp/4443 as TLS
+./run.sh "/path/to/capture.pcapng" --decode-as tcp.port==8888,http --decode-as tcp.port==4443,tls
 ```
 
 ---
