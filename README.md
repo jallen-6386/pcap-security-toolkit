@@ -117,6 +117,7 @@ pcap-security-toolkit/
 ├── config.py
 ├── modules/
 │   ├── __init__.py
+│   ├── allowlists.py
 │   ├── arp_detection.py
 │   ├── cases.py
 │   ├── dependencies.py
@@ -404,9 +405,17 @@ Aggregated findings with these columns:
 Deduplicated indicators:
 - `ioc_type` — ipv4, domain, url, sha256, user_agent, ja3_fingerprint, ja4_fingerprint, ja4s_fingerprint, ja4h_fingerprint
 - `value`, `source`, `confidence`, `first_seen`
+- `benign_infra` — True when the value is well-known benign infrastructure (public DNS resolver IP or CDN/cloud parent domain), so a SIEM import can filter it instead of block-listing it
 - `country_iso`, `asn`, `asn_org` (if GeoIP enabled)
 
 IPv4 noise reduction: special-use ranges are never emitted as IOCs or treated as external targets — private (RFC 1918), loopback, link-local, CGNAT (RFC 6598), documentation/TEST-NET (RFC 5737/3849), benchmarking (RFC 2544), multicast, broadcast, and unspecified addresses.
+
+### False-positive tuning
+To keep findings actionable, several detectors are tuned against benign noise (nothing is hidden — findings are downgraded/annotated, not dropped):
+- **Beaconing** to public DNS resolvers or the NTP port is kept but downgraded to INFO and annotated as benign infrastructure
+- **Suspicious downloads** are tiered: executables/scripts (`.exe`, `.dll`, `.ps1`, `.hta`, …) are HIGH; documents/archives (`.pdf`, `.zip`, `.docm`, …) are MEDIUM — content-based detection (carving + YARA + hashing) still inspects the bytes
+- **TLS SNI anomalies** and **high-volume DNS** skip known CDN/cloud parent domains, which legitimately use long/hex-like names and high query volumes
+- **Multi-User-Agent** flagging requires 15+ distinct UAs from one host (a normal workstation easily shows 10+)
 
 ### malicious_ja3.csv
 TLS sessions matching known-malicious JA3 fingerprints:

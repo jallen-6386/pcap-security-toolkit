@@ -4,6 +4,10 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
+from modules.allowlists import (
+    is_benign_beacon_destination,
+    is_cdn_or_cloud_domain,
+)
 from modules.utils import human_readable_bytes, is_noise_ip, is_private_ip
 
 
@@ -11,19 +15,29 @@ from modules.utils import human_readable_bytes, is_noise_ip, is_private_ip
 # Shared constants
 # ---------------------------------------------------------------------------
 
-SUSPICIOUS_DOWNLOAD_EXTENSIONS = {
-    ".exe", ".dll", ".msi", ".zip", ".iso", ".js", ".jse",
-    ".vbs", ".ps1", ".bat", ".cmd", ".hta", ".pdf",
-    ".docm", ".xlsm", ".pptm", ".jar", ".scr", ".lnk",
+# Executable / script types — fetching these over HTTP is genuinely suspicious.
+HIGH_RISK_DOWNLOAD_EXTENSIONS = {
+    ".exe", ".dll", ".msi", ".iso", ".js", ".jse",
+    ".vbs", ".ps1", ".bat", ".cmd", ".hta", ".jar", ".scr", ".lnk",
 }
 
-SUSPICIOUS_CONTENT_TYPES = {
+# Document / archive types — can carry malware but are commonly benign, so they
+# are flagged at MEDIUM. Content-based detection (carving + YARA + hashing)
+# still inspects the actual bytes on the extraction path.
+MEDIUM_RISK_DOWNLOAD_EXTENSIONS = {
+    ".zip", ".pdf", ".docm", ".xlsm", ".pptm", ".rar", ".7z",
+}
+
+HIGH_RISK_CONTENT_TYPES = {
     "application/octet-stream",
     "application/x-dosexec",
     "application/x-msdownload",
+    "application/x-ms-installer",
+}
+
+MEDIUM_RISK_CONTENT_TYPES = {
     "application/zip",
     "application/pdf",
-    "application/x-ms-installer",
 }
 
 CREDENTIAL_PATTERNS = [
@@ -252,11 +266,21 @@ def build_suspicious_downloads(http_rows: list[dict], extracted_payloads: list[d
 
         ext = Path(uri.split("?", 1)[0]).suffix.lower()
         reasons = []
+        severity = None
 
-        if method == "GET" and ext in SUSPICIOUS_DOWNLOAD_EXTENSIONS:
-            reasons.append(f"GET to suspicious file extension {ext}")
-        if content_type in SUSPICIOUS_CONTENT_TYPES:
+        if method == "GET" and ext in HIGH_RISK_DOWNLOAD_EXTENSIONS:
+            reasons.append(f"GET to high-risk file extension {ext}")
+            severity = "HIGH"
+        elif method == "GET" and ext in MEDIUM_RISK_DOWNLOAD_EXTENSIONS:
+            reasons.append(f"GET to file extension {ext}")
+            severity = "MEDIUM"
+
+        if content_type in HIGH_RISK_CONTENT_TYPES:
+            reasons.append(f"High-risk content-type {content_type}")
+            severity = "HIGH"
+        elif content_type in MEDIUM_RISK_CONTENT_TYPES:
             reasons.append(f"Suspicious content-type {content_type}")
+            severity = severity or "MEDIUM"
 
         if reasons:
             downloads.append({
@@ -267,22 +291,29 @@ def build_suspicious_downloads(http_rows: list[dict], extracted_payloads: list[d
                 "host": host,
                 "uri": uri,
                 "content_type": content_type,
+                "severity": severity,
                 "reason": " | ".join(reasons),
             })
 
     for row in extracted_payloads:
         detected = row.get("detected_file_type", "")
-        if detected in {"PDF", "ZIP", "PE_EXE", "RAR", "SEVEN_Z"}:
-            downloads.append({
-                "source": "extracted_payload",
-                "tcp_stream": row.get("tcp_stream", ""),
-                "src_ip": row.get("src_ip", ""),
-                "dst_ip": row.get("dst_ip", ""),
-                "host": "",
-                "uri": row.get("filename", ""),
-                "content_type": row.get("content_type", ""),
-                "reason": f"Extracted payload detected as {detected}",
-            })
+        if detected == "PE_EXE":
+            severity = "HIGH"
+        elif detected in {"PDF", "ZIP", "RAR", "SEVEN_Z"}:
+            severity = "MEDIUM"
+        else:
+            continue
+        downloads.append({
+            "source": "extracted_payload",
+            "tcp_stream": row.get("tcp_stream", ""),
+            "src_ip": row.get("src_ip", ""),
+            "dst_ip": row.get("dst_ip", ""),
+            "host": "",
+            "uri": row.get("filename", ""),
+            "content_type": row.get("content_type", ""),
+            "severity": severity,
+            "reason": f"Extracted payload detected as {detected}",
+        })
 
     return downloads
 
@@ -325,6 +356,7 @@ def detect_beaconing(flow_times: dict, flow_bytes: dict) -> list[dict]:
                 "jitter_pct": jitter_pct,
                 "bytes": flow_bytes.get(flow, 0),
                 "bytes_human": human_readable_bytes(flow_bytes.get(flow, 0)),
+                "benign_infrastructure": is_benign_beacon_destination(dst, dport),
             })
 
     findings.sort(key=lambda x: (x["jitter_pct"], -x["packet_count"]))
@@ -396,6 +428,11 @@ def detect_tls_sni_anomalies(tls_summary: list[dict]) -> list[dict]:
     for row in tls_summary:
         sni = (row.get("sni", "") or "").strip().lower()
         if not sni:
+            continue
+
+        # CDN/cloud hostnames are legitimately long, hex-like and digit-heavy;
+        # the heuristics below would flag them as anomalies, so skip them.
+        if is_cdn_or_cloud_domain(sni):
             continue
 
         reasons = []
@@ -512,6 +549,9 @@ def detect_dns_tunneling(dns_rows: list[dict]) -> list[dict]:
     # High query volume to a single registered domain (> 50 queries)
     for registered_domain, entries in domain_query_map.items():
         if len(entries) > 50:
+            # CDN/cloud/first-party parents are queried at high volume normally.
+            if is_cdn_or_cloud_domain(registered_domain):
+                continue
             src_ips = sorted({e["src_ip"] for e in entries})
             key = ("volume", registered_domain)
             if key not in seen_keys:
@@ -578,9 +618,12 @@ def detect_suspicious_user_agents(http_rows: list[dict]) -> list[dict]:
                     "reason": " | ".join(reasons),
                 })
 
-    # Flag single source IPs using 4+ distinct UAs
+    # Flag single source IPs using an unusually large number of distinct UAs.
+    # A normal corporate workstation easily shows 10-30 (per-app, per-version),
+    # so the threshold is set high to catch only genuine outliers; the tool/
+    # malware substring matching above is the stronger signal.
     for src_ip, uas in ua_per_src.items():
-        if len(uas) >= 4:
+        if len(uas) >= 15:
             key = (src_ip, "multi_ua")
             if key not in seen:
                 seen.add(key)
@@ -820,15 +863,22 @@ def build_alerts(
             }))
 
     for item in beaconing_candidates:
-        alerts.append(_enrich_alert({
+        benign = item.get("benign_infrastructure")
+        reason = f"Regular timing detected with low jitter ({item.get('jitter_pct')}%)"
+        beacon_alert = {
             "alert_type": "BEACONING_CANDIDATE",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
             "protocol": item.get("protocol"),
             "sport": item.get("sport"),
             "dport": item.get("dport"),
-            "reason": f"Regular timing detected with low jitter ({item.get('jitter_pct')}%)",
-        }))
+            "reason": reason + (
+                " — benign infrastructure destination (NTP/public resolver)" if benign else ""
+            ),
+        }
+        if benign:
+            beacon_alert["severity"] = "INFO"
+        alerts.append(_enrich_alert(beacon_alert))
 
     for item in credential_findings:
         alerts.append(_enrich_alert({
@@ -844,14 +894,17 @@ def build_alerts(
         }))
 
     for item in suspicious_downloads:
-        alerts.append(_enrich_alert({
+        download_alert = {
             "alert_type": "SUSPICIOUS_DOWNLOAD",
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
             "protocol": "HTTP",
             "tcp_stream": item.get("tcp_stream"),
             "reason": item.get("reason"),
-        }))
+        }
+        if item.get("severity"):
+            download_alert["severity"] = item["severity"]
+        alerts.append(_enrich_alert(download_alert))
 
     for item in entropy_exfil_candidates:
         alerts.append(_enrich_alert({
