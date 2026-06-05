@@ -70,7 +70,11 @@ from modules.streams import (
     get_unique_tcp_stream_ids,
 )
 from modules.tshark_capabilities import get_available_fields
-from modules.tshark_stats import run_expert_info, run_protocol_hierarchy
+from modules.tshark_stats import (
+    run_credentials,
+    run_expert_info,
+    run_protocol_hierarchy,
+)
 from modules.tshark_extract import (
     extract_arp_fields,
     extract_dns_fields,
@@ -121,6 +125,7 @@ def print_report_summary(report: dict, alerts: list[dict], severity_filter: str)
     print(f"Extracted Payloads:         {report.get('extracted_payload_count', 0)}")
     print(f"Credential Findings:        {report.get('credential_finding_count', 0)}")
     print(f"Credential POSTs:           {report.get('credential_post_count', 0)}")
+    print(f"Cleartext Credentials:      {report.get('cleartext_credential_count', 0)}")
     print(f"Suspicious Downloads:       {report.get('suspicious_download_count', 0)}")
     print(f"Entropy Exfil Candidates:   {report.get('entropy_exfil_candidate_count', 0)}")
     print(f"Beaconing Candidates:       {report.get('beaconing_candidate_count', 0)}")
@@ -459,6 +464,7 @@ def main():
     jarm_results = []
     protocol_hierarchy_rows = []
     expert_info_rows = []
+    credential_tap_rows = []
 
     # ------------------------------------------------------------------
     # TShark-assisted extraction
@@ -495,10 +501,12 @@ def main():
             # Statistics taps run in the same pool but return (rows, raw, err).
             phs_future = executor.submit(run_protocol_hierarchy, pcap_path)
             expert_future = executor.submit(run_expert_info, pcap_path)
+            cred_future = executor.submit(run_credentials, pcap_path)
             for future in as_completed(future_to_name):
                 extraction_results[future_to_name[future]] = future.result()
             protocol_hierarchy_rows, phs_raw, phs_err = phs_future.result()
             expert_info_rows, expert_raw, expert_err = expert_future.result()
+            credential_tap_rows, cred_raw, cred_err = cred_future.result()
 
         http_rows, http_err = extraction_results["http"]
         http_response_rows, http_resp_err = extraction_results["http_resp"]
@@ -528,6 +536,7 @@ def main():
             ("TLS metadata", tls_err),
             ("Protocol hierarchy", phs_err),
             ("Expert Info", expert_err),
+            ("Credentials", cred_err),
         ]:
             if err:
                 print(f"[!] {label} TShark extraction warning: {err}")
@@ -540,6 +549,10 @@ def main():
         if expert_raw:
             (case_output_dir / "expert_info_raw.txt").write_text(
                 expert_raw, encoding="utf-8", errors="replace"
+            )
+        if cred_raw:
+            (case_output_dir / "credentials_raw.txt").write_text(
+                cred_raw, encoding="utf-8", errors="replace"
             )
 
         if tcp_stream_rows:
@@ -745,6 +758,7 @@ def main():
         kerberos_rows=kerberos_rows,
         http_response_anomalies=http_response_anomalies,
         expert_info_items=expert_info_rows,
+        credential_tap_items=credential_tap_rows,
     )
 
     # ------------------------------------------------------------------
@@ -829,6 +843,7 @@ def main():
         "expert_error_count": sum(
             1 for r in expert_info_rows if r.get("severity") == "Error"
         ),
+        "cleartext_credential_count": len(credential_tap_rows),
         "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
         "ioc_count": len(iocs),
@@ -876,6 +891,7 @@ def main():
     write_csv(case_output_dir / "jarm_fingerprints.csv", jarm_results)
     write_csv(case_output_dir / "protocol_hierarchy.csv", protocol_hierarchy_rows)
     write_csv(case_output_dir / "expert_info.csv", expert_info_rows)
+    write_csv(case_output_dir / "credentials_tshark.csv", credential_tap_rows)
     write_csv(case_output_dir / "carved_files.csv", carved_files)
     write_csv(case_output_dir / "iocs.csv", iocs)
 

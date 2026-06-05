@@ -95,6 +95,7 @@ MITRE_MAP = {
     "KERBEROS_ANOMALY":                   ("T1558",    "Credential Access",     "Steal or Forge Kerberos Tickets"),
     "EMAIL_ACTIVITY":                     ("T1048",    "Exfiltration",          "Exfiltration Over Alternative Protocol"),
     "HTTP_RESPONSE_ANOMALY":              ("T1105",    "Command and Control",   "Ingress Tool Transfer"),
+    "CLEARTEXT_CREDENTIAL":               ("T1552",    "Credential Access",     "Unsecured Credentials"),
 }
 
 ALERT_SEVERITY_MAP = {
@@ -120,6 +121,7 @@ ALERT_SEVERITY_MAP = {
     "HTTP_BODY_PRESENT":                  "MEDIUM",
     "EMAIL_ACTIVITY":                     "LOW",
     "HTTP_RESPONSE_ANOMALY":              "MEDIUM",
+    "CLEARTEXT_CREDENTIAL":               "HIGH",
     "FILE_NAME_INDICATOR_OBSERVED":       "LOW",
     "TLS_SNI_OBSERVED":                   "INFO",
 }
@@ -729,6 +731,7 @@ def build_alerts(
     kerberos_rows=None,
     http_response_anomalies=None,
     expert_info_items=None,
+    credential_tap_items=None,
 ):
     alerts = []
     http_body_previews = http_body_previews or []
@@ -752,6 +755,7 @@ def build_alerts(
     kerberos_rows = kerberos_rows or []
     http_response_anomalies = http_response_anomalies or []
     expert_info_items = expert_info_items or []
+    credential_tap_items = credential_tap_items or []
 
     for flow, byte_count in flow_bytes.items():
         src, dst, sport, dport, proto = flow
@@ -995,6 +999,23 @@ def build_alerts(
             "reason": (
                 f"YARA rule '{item.get('rule_name')}' matched "
                 f"{item.get('file_path', '')}"
+            ),
+        }))
+
+    # Cleartext credentials recovered by TShark's credentials tap
+    # (FTP, HTTP basic, IMAP, POP, SMTP).
+    for item in credential_tap_items:
+        protocol = (item.get("protocol", "") or "").strip()
+        username = (item.get("username", "") or "").strip()
+        alerts.append(_enrich_alert({
+            "alert_type": "CLEARTEXT_CREDENTIAL",
+            "src_ip": "",
+            "dst_ip": "",
+            "protocol": protocol,
+            "reason": (
+                f"Cleartext credential exposed via {protocol}"
+                + (f" (username '{username}')" if username else "")
+                + f" — packet {item.get('packet', '')}"
             ),
         }))
 

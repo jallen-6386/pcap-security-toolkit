@@ -45,6 +45,8 @@ _EXPERT_GROUPS = [
 _SECTION_RE = re.compile(r"^(Errors|Warnings|Notes|Chats)\s+\((\d+)\)\s*$")
 _PHS_RE = re.compile(r"^(\s*)(\S+)\s+frames:(\d+)\s+bytes:(\d+)\s*$")
 
+_CRED_COLUMNS = ["Packet", "Protocol", "Username", "Info"]
+
 
 def run_protocol_hierarchy(pcap_path):
     """Return (rows, raw_text, err). Rows: protocol, depth, frames, bytes."""
@@ -146,5 +148,55 @@ def run_expert_info(pcap_path):
             "group": group,
             "protocol": protocol,
             "summary": summary,
+        })
+    return rows, result.stdout, None
+
+
+def run_credentials(pcap_path):
+    """
+    Return (rows, raw_text, err) from TShark's -z credentials tap.
+
+    The tap prints a fixed-width table whose Protocol column can contain
+    spaces ("HTTP basic auth"), so rows are sliced by the header column
+    positions rather than split on whitespace.
+    """
+    tshark = find_tshark()
+    if not tshark:
+        return [], "", "TShark not found"
+
+    cmd = [tshark, "-n", "-q", "-r", str(pcap_path), "-z", "credentials"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except Exception as exc:
+        return [], "", str(exc)
+    if result.returncode != 0:
+        return [], result.stdout, result.stderr.strip()
+
+    lines = result.stdout.splitlines()
+    header_idx = None
+    bounds = None
+    for i, line in enumerate(lines):
+        if all(col in line for col in _CRED_COLUMNS):
+            positions = [line.index(col) for col in _CRED_COLUMNS]
+            bounds = list(zip(positions, positions[1:] + [None]))
+            header_idx = i
+            break
+    if header_idx is None or bounds is None:
+        return [], result.stdout, None
+
+    rows = []
+    for line in lines[header_idx + 1:]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("---") or stripped.startswith("==="):
+            continue
+        cells = [line[start:end].strip() for start, end in bounds]
+        packet, protocol, username, info = cells
+        if not packet.isdigit():
+            continue
+        rows.append({
+            "packet": packet,
+            "protocol": protocol,
+            "username": username,
+            "info": info,
         })
     return rows, result.stdout, None

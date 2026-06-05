@@ -35,13 +35,14 @@ This project uses:
 ### First-Pass Triage (TShark statistics taps)
 - Protocol hierarchy (`-z io,phs`) — packet/byte breakdown by protocol
 - Expert Info (`-z expert`) — dissector-recognized anomalies (malformed packets, protocol violations, security and decryption issues) with network-noise suppression
+- Cleartext credential recovery (`-z credentials`) — protocol-aware extraction across FTP, HTTP basic, IMAP, POP, and SMTP
 - Version-aware field extraction — unsupported display-filter fields are detected via `tshark -G fields` and dropped before extraction, so one unavailable field (e.g. a JA4 field on older TShark) can't fail an entire pass
 - Name resolution disabled (`-n`) on all TShark calls for deterministic, faster offline analysis
 
 ### Protocol Extraction (TShark)
 - HTTP requests and responses (including response codes and server headers)
 - DNS queries with A/AAAA/CNAME answers and TTL
-- TLS metadata: SNI, cipher suite, JA3/JA3S and JA4/JA4S fingerprints, certificate details
+- TLS metadata: SNI, ALPN, cipher suite, JA3/JA3S and JA4/JA4S fingerprints, certificate serial/validity/SAN details
 - SMB file and path indicators
 - FTP RETR/STOR command extraction
 - SMTP/IMAP/POP3 commands and authentication
@@ -55,6 +56,7 @@ This project uses:
 | DNS tunneling (entropy, length, volume, TXT/NULL) | `DNS_TUNNELING_CANDIDATE` | T1071.004 |
 | Entropy-based exfiltration | `ENTROPY_BASED_EXFIL_CANDIDATE` | T1048.003 |
 | Credential indicators in HTTP / payloads | `CREDENTIAL_INDICATOR` | T1552 |
+| Cleartext credentials (FTP, HTTP basic, IMAP, POP, SMTP) | `CLEARTEXT_CREDENTIAL` | T1552 |
 | Credential POST reconstruction | `CREDENTIAL_POST_RECONSTRUCTED` | T1056.003 |
 | Suspicious downloads (ext, content-type, signature) | `SUSPICIOUS_DOWNLOAD` | T1105 |
 | TLS SNI anomalies (long, hex-like, suspicious TLDs) | `TLS_SNI_ANOMALY` | T1071.001 |
@@ -333,6 +335,8 @@ output/
     ├── protocol_hierarchy_raw.txt
     ├── expert_info.csv                 ← Dissector-recognized anomalies (-z expert)
     ├── expert_info_raw.txt
+    ├── credentials_tshark.csv          ← Cleartext credentials (-z credentials)
+    ├── credentials_raw.txt
     ├── iocs.stix2.json
     ├── smb_tshark.csv
     ├── ftp_tshark.csv
@@ -437,6 +441,11 @@ Dissector-recognized anomalies from TShark's `-z expert` tap:
 - Pure network-condition groups (retransmissions, checksum offload) are kept here but suppressed from alerts
 - Error-severity and high-interest Warning items (Malformed, Security, Decryption, Protocol, Reassemble) become `EXPERT_INFO_ANOMALY` alerts
 - Raw tap output preserved in `expert_info_raw.txt`
+
+### credentials_tshark.csv
+Cleartext credentials recovered by TShark's `-z credentials` tap:
+- `packet`, `protocol` (e.g. "HTTP basic auth", "FTP"), `username`, `info`
+- Each row becomes a HIGH `CLEARTEXT_CREDENTIAL` alert; raw tap output preserved in `credentials_raw.txt`
 
 ### jarm_fingerprints.csv
 Active TLS server fingerprints generated when `--jarm-probe` is set:

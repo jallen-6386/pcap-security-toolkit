@@ -745,6 +745,8 @@ class App(_Root):
             ("JARM fingerprints",    report_data.get("jarm_count", 0)),
             ("Malicious JA3",        report_data.get("malicious_ja3_count", 0)),
             ("Malicious JA4",        report_data.get("malicious_ja4_count", 0)),
+            ("Cleartext creds",      report_data.get("cleartext_credential_count", 0)),
+            ("Expert Info errors",   report_data.get("expert_error_count", 0)),
         ]
         for i, (label, value) in enumerate(stats):
             row = i // 3
