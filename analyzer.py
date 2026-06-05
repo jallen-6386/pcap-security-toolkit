@@ -2,7 +2,7 @@
 
 """
 PCAP Security Toolkit
-Version: 2.2.0
+Version: 2.3.0
 """
 
 import argparse
@@ -398,7 +398,7 @@ def main():
     case_output_dir = get_case_output_dir(OUTPUT_DIR, args.case)
 
     print("=" * 70)
-    print("PCAP SECURITY TOOLKIT v2.2.0")
+    print("PCAP SECURITY TOOLKIT v2.3.0")
     print("=" * 70)
 
     # ------------------------------------------------------------------
