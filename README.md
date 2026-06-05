@@ -32,6 +32,12 @@ This project uses:
 - Top talkers, protocols, and conversations
 - DNS query and answer extraction with passive DNS correlation map
 
+### First-Pass Triage (TShark statistics taps)
+- Protocol hierarchy (`-z io,phs`) — packet/byte breakdown by protocol
+- Expert Info (`-z expert`) — dissector-recognized anomalies (malformed packets, protocol violations, security and decryption issues) with network-noise suppression
+- Version-aware field extraction — unsupported display-filter fields are detected via `tshark -G fields` and dropped before extraction, so one unavailable field (e.g. a JA4 field on older TShark) can't fail an entire pass
+- Name resolution disabled (`-n`) on all TShark calls for deterministic, faster offline analysis
+
 ### Protocol Extraction (TShark)
 - HTTP requests and responses (including response codes and server headers)
 - DNS queries with A/AAAA/CNAME answers and TTL
@@ -65,6 +71,7 @@ This project uses:
 | HTTP response anomalies (confirmed delivery, scanning) | `HTTP_RESPONSE_ANOMALY` | T1105 |
 | Kerberos errors (AS-REP roasting, Kerberoasting) | `KERBEROS_ANOMALY` | T1558 |
 | File name indicators (HTTP URI, SMB, FTP) | `FILE_NAME_INDICATOR_OBSERVED` | T1105 |
+| TShark Expert Info anomalies (malformed, protocol, security) | `EXPERT_INFO_ANOMALY` | — |
 
 ### Output
 - Every alert includes `severity` (CRITICAL/HIGH/MEDIUM/LOW/INFO), `mitre_technique_id`, `mitre_tactic`, and `mitre_technique_name`
@@ -130,7 +137,9 @@ pcap-security-toolkit/
 │   ├── smtp_attachments.py
 │   ├── stix_export.py
 │   ├── streams.py
+│   ├── tshark_capabilities.py
 │   ├── tshark_extract.py
+│   ├── tshark_stats.py
 │   ├── utils.py
 │   └── yara_scanner.py
 ├── rules/
@@ -320,6 +329,10 @@ output/
     ├── os_fingerprints.csv
     ├── smtp_attachments.csv
     ├── yara_hits.csv
+    ├── protocol_hierarchy.csv          ← Protocol breakdown by packets/bytes (-z io,phs)
+    ├── protocol_hierarchy_raw.txt
+    ├── expert_info.csv                 ← Dissector-recognized anomalies (-z expert)
+    ├── expert_info_raw.txt
     ├── iocs.stix2.json
     ├── smb_tshark.csv
     ├── ftp_tshark.csv
@@ -413,6 +426,18 @@ Flagged on any of:
 - `LATERAL_MOVEMENT_CANDIDATE` — single host connected to 3+ internal targets via SMB (port 445)
 - `INTERNAL_SCAN_CANDIDATE` — small TCP connections to 10+ internal IPs or across 10+ ports
 
+### protocol_hierarchy.csv
+Protocol breakdown of the capture from TShark's `-z io,phs` tap:
+- `protocol`, `depth` (nesting level), `frames`, `bytes`
+- Fast "what's in this PCAP?" overview; raw tap output preserved in `protocol_hierarchy_raw.txt`
+
+### expert_info.csv
+Dissector-recognized anomalies from TShark's `-z expert` tap:
+- `severity` (Error / Warning / Note / Chat), `frequency`, `group`, `protocol`, `summary`
+- Pure network-condition groups (retransmissions, checksum offload) are kept here but suppressed from alerts
+- Error-severity and high-interest Warning items (Malformed, Security, Decryption, Protocol, Reassemble) become `EXPERT_INFO_ANOMALY` alerts
+- Raw tap output preserved in `expert_info_raw.txt`
+
 ### jarm_fingerprints.csv
 Active TLS server fingerprints generated when `--jarm-probe` is set:
 - 62-character JARM hash per `(dst_ip, dst_port)` observed in TLS metadata
@@ -477,6 +502,7 @@ The toolkit is built to handle large captures (300,000+ packets) without loading
 - **Single-pass packet analysis** — flow statistics and DNS/HTTP summaries are computed in one combined iteration rather than two separate passes over the capture.
 - **Parallel TShark extraction** — the independent per-protocol extraction passes (HTTP, DNS, TLS, SMB, FTP, SMTP, Kerberos, ICMP, ARP, TCP SYN, stream index) run concurrently instead of serially. The worker count defaults to the number of CPU cores (capped at 8) and is configurable via `TSHARK_MAX_WORKERS` in `config.py`.
 - **Parallel stream export** — when `--export-streams` is set, the per-stream follow passes are also run concurrently.
+- **Name resolution disabled** — all TShark calls use `-n`, avoiding DNS/host lookups that would otherwise add latency and non-determinism on large captures.
 
 **Tuning tips for very large captures:**
 - `--export-streams` adds two TShark follow passes per stream. Keep `--max-streams` modest (default 25) on large files; raise it only when you need deeper payload coverage.
@@ -490,7 +516,7 @@ The toolkit is built to handle large captures (300,000+ packets) without loading
 - Full HTTP/2 body reconstruction is not supported
 - Deep HTTPS payload inspection requires TLS decryption material (key log file)
 - TCP reassembly covers reconstructable plaintext streams only
-- JA3 field availability depends on TShark version (gracefully skipped if unavailable)
+- Some fields (JA3/JA4 family, newer protocol fields) depend on TShark version; unavailable fields are detected via `tshark -G fields` and dropped automatically rather than failing the pass
 - GeoIP enrichment requires a separate database download
 
 ---

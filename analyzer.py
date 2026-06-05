@@ -69,6 +69,8 @@ from modules.streams import (
     extract_tcp_stream_index,
     get_unique_tcp_stream_ids,
 )
+from modules.tshark_capabilities import get_available_fields
+from modules.tshark_stats import run_expert_info, run_protocol_hierarchy
 from modules.tshark_extract import (
     extract_arp_fields,
     extract_dns_fields,
@@ -136,6 +138,10 @@ def print_report_summary(report: dict, alerts: list[dict], severity_filter: str)
     print(f"OS Fingerprints:            {report.get('os_fingerprint_count', 0)}")
     print(f"SMTP Attachments:           {report.get('smtp_attachment_count', 0)}")
     print(f"YARA Hits:                  {report.get('yara_hit_count', 0)}")
+    print(
+        f"Expert Info Items:          {report.get('expert_info_count', 0)} "
+        f"({report.get('expert_error_count', 0)} errors)"
+    )
     print(f"HTTP Response Anomalies:    {report.get('http_response_anomaly_count', 0)}")
     print(f"Carved Files:               {report.get('carved_file_count', 0)}")
     print(f"IOCs Extracted:             {report.get('ioc_count', 0)}")
@@ -451,6 +457,8 @@ def main():
     smtp_attachments_list = []
     yara_hits = []
     jarm_results = []
+    protocol_hierarchy_rows = []
+    expert_info_rows = []
 
     # ------------------------------------------------------------------
     # TShark-assisted extraction
@@ -459,6 +467,11 @@ def main():
         # Each extractor is an independent full-file TShark pass. They share no
         # state, so we run them concurrently — on large captures this turns a
         # dozen serial reads into a handful of parallel ones.
+        # Warm the field-capability cache once (in the main thread) so the
+        # parallel workers below all hit the cache instead of each running
+        # `tshark -G fields`.
+        get_available_fields()
+
         print(f"[*] Running TShark extraction ({TSHARK_MAX_WORKERS} parallel workers)")
         extractors = {
             "http":         extract_http_fields,
@@ -479,8 +492,13 @@ def main():
             future_to_name = {
                 executor.submit(fn, pcap_path): name for name, fn in extractors.items()
             }
+            # Statistics taps run in the same pool but return (rows, raw, err).
+            phs_future = executor.submit(run_protocol_hierarchy, pcap_path)
+            expert_future = executor.submit(run_expert_info, pcap_path)
             for future in as_completed(future_to_name):
                 extraction_results[future_to_name[future]] = future.result()
+            protocol_hierarchy_rows, phs_raw, phs_err = phs_future.result()
+            expert_info_rows, expert_raw, expert_err = expert_future.result()
 
         http_rows, http_err = extraction_results["http"]
         http_response_rows, http_resp_err = extraction_results["http_resp"]
@@ -508,9 +526,21 @@ def main():
             ("TCP SYN", syn_err),
             ("TCP stream index", stream_err),
             ("TLS metadata", tls_err),
+            ("Protocol hierarchy", phs_err),
+            ("Expert Info", expert_err),
         ]:
             if err:
                 print(f"[!] {label} TShark extraction warning: {err}")
+
+        # Preserve the raw statistics output as case artifacts.
+        if phs_raw:
+            (case_output_dir / "protocol_hierarchy_raw.txt").write_text(
+                phs_raw, encoding="utf-8", errors="replace"
+            )
+        if expert_raw:
+            (case_output_dir / "expert_info_raw.txt").write_text(
+                expert_raw, encoding="utf-8", errors="replace"
+            )
 
         if tcp_stream_rows:
             stream_ids = get_unique_tcp_stream_ids(tcp_stream_rows)
@@ -714,6 +744,7 @@ def main():
         yara_hits=yara_hits,
         kerberos_rows=kerberos_rows,
         http_response_anomalies=http_response_anomalies,
+        expert_info_items=expert_info_rows,
     )
 
     # ------------------------------------------------------------------
@@ -793,6 +824,11 @@ def main():
         "smtp_attachment_count": len(smtp_attachments_list),
         "yara_hit_count": len(yara_hits),
         "jarm_count": len(jarm_results),
+        "protocol_hierarchy_count": len(protocol_hierarchy_rows),
+        "expert_info_count": len(expert_info_rows),
+        "expert_error_count": sum(
+            1 for r in expert_info_rows if r.get("severity") == "Error"
+        ),
         "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
         "ioc_count": len(iocs),
@@ -838,6 +874,8 @@ def main():
     write_csv(case_output_dir / "smtp_attachments.csv", smtp_attachments_list)
     write_csv(case_output_dir / "yara_hits.csv", yara_hits)
     write_csv(case_output_dir / "jarm_fingerprints.csv", jarm_results)
+    write_csv(case_output_dir / "protocol_hierarchy.csv", protocol_hierarchy_rows)
+    write_csv(case_output_dir / "expert_info.csv", expert_info_rows)
     write_csv(case_output_dir / "carved_files.csv", carved_files)
     write_csv(case_output_dir / "iocs.csv", iocs)
 

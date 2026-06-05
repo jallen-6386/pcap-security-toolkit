@@ -126,6 +126,14 @@ ALERT_SEVERITY_MAP = {
 
 _SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
 
+# Expert Info groups that are almost always network conditions rather than
+# security-relevant events (retransmissions, checksum offload artifacts).
+# Suppressed from alerts but still written to expert_info.csv.
+_EXPERT_NOISE_GROUPS = {"Sequence", "Checksum"}
+
+# Warning-severity Expert Info groups worth surfacing as low alerts.
+_EXPERT_WARN_GROUPS = {"Malformed", "Security", "Decryption", "Protocol", "Reassemble"}
+
 
 def _enrich_alert(alert: dict) -> dict:
     alert_type = alert.get("alert_type", "")
@@ -720,6 +728,7 @@ def build_alerts(
     yara_hits=None,
     kerberos_rows=None,
     http_response_anomalies=None,
+    expert_info_items=None,
 ):
     alerts = []
     http_body_previews = http_body_previews or []
@@ -742,6 +751,7 @@ def build_alerts(
     yara_hits = yara_hits or []
     kerberos_rows = kerberos_rows or []
     http_response_anomalies = http_response_anomalies or []
+    expert_info_items = expert_info_items or []
 
     for flow, byte_count in flow_bytes.items():
         src, dst, sport, dport, proto = flow
@@ -985,6 +995,31 @@ def build_alerts(
             "reason": (
                 f"YARA rule '{item.get('rule_name')}' matched "
                 f"{item.get('file_path', '')}"
+            ),
+        }))
+
+    # Expert Info: dissector-recognized anomalies. Suppress pure network-noise
+    # groups; surface Errors (MEDIUM) and high-interest Warnings (LOW) only.
+    for item in expert_info_items:
+        group = (item.get("group", "") or "").strip()
+        section = (item.get("severity", "") or "").strip()
+        if group in _EXPERT_NOISE_GROUPS:
+            continue
+        if section == "Error":
+            severity = "MEDIUM"
+        elif section == "Warning" and group in _EXPERT_WARN_GROUPS:
+            severity = "LOW"
+        else:
+            continue
+        alerts.append(_enrich_alert({
+            "alert_type": "EXPERT_INFO_ANOMALY",
+            "src_ip": "",
+            "dst_ip": "",
+            "protocol": item.get("protocol", ""),
+            "severity": severity,
+            "reason": (
+                f"{section}/{group}: {item.get('summary', '')} "
+                f"(x{item.get('frequency', 0)})"
             ),
         }))
 

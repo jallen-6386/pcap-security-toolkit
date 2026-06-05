@@ -24,6 +24,7 @@ def export_follow_stream(pcap_path, stream_id, mode="ascii"):
 
     cmd = [
         tshark_path,
+        "-n",
         "-r", str(pcap_path),
         "-q",
         "-z", f"follow,tcp,{mode},{stream_id}",

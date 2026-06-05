@@ -239,7 +239,7 @@ def extract_tls_handshake_raw_for_ja4(pcap_path) -> tuple[list[dict], str | None
     ]
 
     cmd = [
-        tshark_path, "-r", str(pcap_path),
+        tshark_path, "-n", "-r", str(pcap_path),
         "-T", "fields",
         "-Y", "tls.handshake.type == 1 || tls.handshake.type == 2",
     ]

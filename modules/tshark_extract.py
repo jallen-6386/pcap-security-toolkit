@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 from modules.dependencies import find_tshark
+from modules.tshark_capabilities import filter_available_fields
 
 
 def set_csv_field_limit():
@@ -21,12 +22,17 @@ def run_tshark_fields(pcap_path, fields, display_filter=None):
     if not tshark_path:
         return [], "TShark not found"
 
-    cmd = [tshark_path, "-r", str(pcap_path), "-T", "fields"]
+    # Drop fields this TShark version doesn't know about so a single
+    # unsupported field can't fail the whole pass. -n disables name
+    # resolution for deterministic, faster offline analysis.
+    usable_fields, _dropped = filter_available_fields(fields)
+
+    cmd = [tshark_path, "-n", "-r", str(pcap_path), "-T", "fields"]
 
     if display_filter:
         cmd.extend(["-Y", display_filter])
 
-    for field in fields:
+    for field in usable_fields:
         cmd.extend(["-e", field])
 
     cmd.extend(["-E", "header=y", "-E", "separator=,", "-E", "quote=d"])
