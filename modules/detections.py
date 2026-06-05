@@ -4,7 +4,7 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
-from modules.utils import human_readable_bytes, is_private_ip
+from modules.utils import human_readable_bytes, is_noise_ip, is_private_ip
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +337,8 @@ def detect_entropy_exfil_candidates(extracted_payloads: list[dict]) -> list[dict
     for row in extracted_payloads:
         src_ip = row.get("src_ip", "")
         dst_ip = row.get("dst_ip", "")
-        if not is_private_ip(src_ip) or is_private_ip(dst_ip):
+        # Source must be internal and destination a real external host.
+        if not is_private_ip(src_ip) or is_noise_ip(dst_ip):
             continue
 
         entropy = float(row.get("entropy", 0) or 0)
@@ -452,6 +453,11 @@ def detect_dns_tunneling(dns_rows: list[dict]) -> list[dict]:
         if not qname:
             continue
 
+        # Reverse-DNS (PTR) lookups are normal operational traffic, never
+        # tunneling — exclude them from both the per-query and volume checks.
+        if qname.endswith(".in-addr.arpa") or qname.endswith(".ip6.arpa"):
+            continue
+
         parts = qname.split(".")
         registered = ".".join(parts[-2:]) if len(parts) >= 2 else qname
         domain_query_map[registered].append({
@@ -478,11 +484,16 @@ def detect_dns_tunneling(dns_rows: list[dict]) -> list[dict]:
         if len(qname) > 52:
             reasons.append(f"Long FQDN ({len(qname)} chars)")
 
-        # TXT or NULL record query
-        if qtype in {"16", "10"}:
-            type_label = "TXT" if qtype == "16" else "NULL"
+        # NULL records are rare enough to flag on their own. TXT lookups are
+        # ubiquitous (SPF/DKIM/DMARC/verification), so they only count as a
+        # corroborating signal when an entropy/length indicator is also present.
+        if qtype == "10":
             reasons.append(
-                f"{type_label} record query — uncommon in normal traffic, used by tunneling tools"
+                "NULL record query — uncommon in normal traffic, used by tunneling tools"
+            )
+        elif qtype == "16" and reasons:
+            reasons.append(
+                "TXT record query alongside high-entropy/long-name indicators"
             )
 
         if reasons:
@@ -759,7 +770,7 @@ def build_alerts(
 
     for flow, byte_count in flow_bytes.items():
         src, dst, sport, dport, proto = flow
-        if is_private_ip(src) and not is_private_ip(dst) and byte_count >= 1_000_000:
+        if is_private_ip(src) and not is_noise_ip(dst) and byte_count >= 1_000_000:
             alerts.append(_enrich_alert({
                 "alert_type": "LARGE_PRIVATE_TO_EXTERNAL_TRANSFER",
                 "src_ip": src,

@@ -87,7 +87,7 @@ from modules.tshark_extract import (
     extract_smb_fields,
     extract_tcp_syn_fields,
 )
-from modules.utils import is_private_ip
+from modules.utils import is_noise_ip
 
 
 # ---------------------------------------------------------------------------
@@ -722,7 +722,7 @@ def main():
         external_ips = [
             ip for flow_key in flow_data["flow_bytes"]
             for ip in (flow_key[0], flow_key[1])
-            if ip and not is_private_ip(ip)
+            if ip and not is_noise_ip(ip)
         ]
         geoip_map = enrich_ips(list(set(external_ips)), enricher)
         enricher.close()

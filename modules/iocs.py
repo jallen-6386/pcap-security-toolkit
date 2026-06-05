@@ -6,7 +6,7 @@ fingerprints from all analysis results and outputs a deduplicated iocs.csv
 that can be imported into MISP, OpenCTI, TheHive, or a SIEM block-rule pipeline.
 """
 
-from modules.utils import is_private_ip
+from modules.utils import is_noise_ip
 
 
 def extract_iocs(
@@ -61,7 +61,7 @@ def extract_iocs(
     for flow_key in flow_bytes:
         src, dst, sport, dport, proto = flow_key
         for ip in (src, dst):
-            if ip and not is_private_ip(ip):
+            if ip and not is_noise_ip(ip):
                 _add("ipv4", ip, "flow_analysis", "LOW")
 
     # DNS-resolved domains and IPs
@@ -71,7 +71,7 @@ def extract_iocs(
         ts = row.get("frame.time", "")
         if qname:
             _add("domain", qname, "dns_query", "MEDIUM", ts)
-        if resolved_a and not is_private_ip(resolved_a):
+        if resolved_a and not is_noise_ip(resolved_a):
             _add("ipv4", resolved_a, "dns_answer", "MEDIUM", ts)
 
     # TLS SNI values, JA3, and JA4 fingerprints
@@ -90,7 +90,7 @@ def extract_iocs(
             _add("ja4_fingerprint", ja4, "tls_handshake_ja4", "MEDIUM", ts)
         if ja4s:
             _add("ja4s_fingerprint", ja4s, "tls_handshake_ja4s", "LOW", ts)
-        if dst_ip and not is_private_ip(dst_ip):
+        if dst_ip and not is_noise_ip(dst_ip):
             _add("ipv4", dst_ip, "tls_session", "LOW", ts)
 
     # JA4H fingerprints from HTTP streams
@@ -114,7 +114,7 @@ def extract_iocs(
                 _add("url", url, "http_request", "MEDIUM", ts)
         if ua:
             _add("user_agent", ua, "http_user_agent", "LOW", ts)
-        if dst_ip and not is_private_ip(dst_ip):
+        if dst_ip and not is_noise_ip(dst_ip):
             _add("ipv4", dst_ip, "http_destination", "LOW", ts)
 
     # SHA-256 hashes from extracted payloads
@@ -143,7 +143,7 @@ def extract_iocs(
             continue
         for field in ("src_ip", "dst_ip"):
             ip = (alert.get(field, "") or "").strip()
-            if ip and not is_private_ip(ip):
+            if ip and not is_noise_ip(ip):
                 _add("ipv4", ip, f"alert_{alert.get('alert_type','').lower()}", "HIGH")
 
     # Sort: CRITICAL/HIGH confidence first, then by type, then value

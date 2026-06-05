@@ -406,6 +406,8 @@ Deduplicated indicators:
 - `value`, `source`, `confidence`, `first_seen`
 - `country_iso`, `asn`, `asn_org` (if GeoIP enabled)
 
+IPv4 noise reduction: special-use ranges are never emitted as IOCs or treated as external targets — private (RFC 1918), loopback, link-local, CGNAT (RFC 6598), documentation/TEST-NET (RFC 5737/3849), benchmarking (RFC 2544), multicast, broadcast, and unspecified addresses.
+
 ### malicious_ja3.csv
 TLS sessions matching known-malicious JA3 fingerprints:
 - Cobalt Strike, Metasploit Meterpreter, Dridex, Trickbot, Emotet, AgentTesla, AsyncRAT, njRAT, Mirai
@@ -423,8 +425,10 @@ HTTP client fingerprints computed from exported TCP streams (requires `--export-
 Flagged on any of:
 - High-entropy subdomain labels (Shannon entropy ≥ 3.5, label length ≥ 20 chars)
 - Long FQDNs (> 52 characters)
-- TXT or NULL record queries
+- NULL record queries; TXT queries only when paired with an entropy/length indicator (TXT alone is too common — SPF/DKIM/DMARC — to flag)
 - > 50 queries to a single registered domain
+
+Reverse-DNS lookups (`*.in-addr.arpa`, `*.ip6.arpa`) are excluded as normal operational traffic.
 
 ### lateral_movement_candidates.csv
 - `LATERAL_MOVEMENT_CANDIDATE` — single host connected to 3+ internal targets via SMB (port 445)
