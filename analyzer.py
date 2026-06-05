@@ -83,10 +83,18 @@ from modules.tshark_extract import (
     extract_http_response_fields,
     extract_icmp_fields,
     extract_kerberos_fields,
+    extract_ldap_fields,
+    extract_ntlmssp_fields,
     extract_smtp_fields,
     extract_smb_fields,
     extract_tcp_stream_stats,
     extract_tcp_syn_fields,
+)
+from modules.auth_protocols import (
+    detect_ldap_findings,
+    detect_ntlm_external,
+    summarize_ldap_activity,
+    summarize_ntlm_events,
 )
 from modules.stream_triage import score_streams
 from modules.utils import is_noise_ip
@@ -128,6 +136,8 @@ def print_report_summary(report: dict, alerts: list[dict], severity_filter: str)
     print(f"Credential Findings:        {report.get('credential_finding_count', 0)}")
     print(f"Credential POSTs:           {report.get('credential_post_count', 0)}")
     print(f"Cleartext Credentials:      {report.get('cleartext_credential_count', 0)}")
+    print(f"NTLM Auth Events:           {report.get('ntlm_event_count', 0)}")
+    print(f"LDAP Activity Rows:         {report.get('ldap_activity_count', 0)}")
     print(f"Suspicious Downloads:       {report.get('suspicious_download_count', 0)}")
     print(f"Entropy Exfil Candidates:   {report.get('entropy_exfil_candidate_count', 0)}")
     print(f"Beaconing Candidates:       {report.get('beaconing_candidate_count', 0)}")
@@ -481,6 +491,12 @@ def main():
     credential_tap_rows = []
     stream_stats_rows = []
     stream_triage_rows = []
+    ntlm_rows = []
+    ldap_rows = []
+    ntlm_events = []
+    ntlm_external_findings = []
+    ldap_activity = []
+    ldap_findings = []
 
     # ------------------------------------------------------------------
     # TShark-assisted extraction
@@ -508,6 +524,8 @@ def main():
             "syn":          extract_tcp_syn_fields,
             "stream_index": extract_tcp_stream_index,
             "stream_stats": extract_tcp_stream_stats,
+            "ntlmssp":      extract_ntlmssp_fields,
+            "ldap":         extract_ldap_fields,
             "tls":          extract_tls_metadata,
         }
         extraction_results: dict = {}
@@ -537,6 +555,8 @@ def main():
         syn_rows, syn_err = extraction_results["syn"]
         tcp_stream_rows, stream_err = extraction_results["stream_index"]
         stream_stats_rows, stream_stats_err = extraction_results["stream_stats"]
+        ntlm_rows, ntlm_err = extraction_results["ntlmssp"]
+        ldap_rows, ldap_err = extraction_results["ldap"]
         tls_rows, tls_err = extraction_results["tls"]
 
         for label, err in [
@@ -552,6 +572,8 @@ def main():
             ("TCP SYN", syn_err),
             ("TCP stream index", stream_err),
             ("TCP stream stats", stream_stats_err),
+            ("NTLMSSP", ntlm_err),
+            ("LDAP", ldap_err),
             ("TLS metadata", tls_err),
             ("Protocol hierarchy", phs_err),
             ("Expert Info", expert_err),
@@ -716,6 +738,16 @@ def main():
         print("[*] Passive OS fingerprinting")
         os_fingerprints = fingerprint_hosts(syn_rows)
 
+    if ntlm_rows:
+        print("[*] Analyzing NTLM authentication")
+        ntlm_events = summarize_ntlm_events(ntlm_rows)
+        ntlm_external_findings = detect_ntlm_external(ntlm_events)
+
+    if ldap_rows:
+        print("[*] Analyzing LDAP activity")
+        ldap_activity = summarize_ldap_activity(ldap_rows)
+        ldap_findings = detect_ldap_findings(ldap_rows)
+
     if args.yara_rules:
         yara_rules_compiled = load_rules(args.yara_rules)
         if yara_rules_compiled:
@@ -787,6 +819,8 @@ def main():
         http_response_anomalies=http_response_anomalies,
         expert_info_items=expert_info_rows,
         credential_tap_items=credential_tap_rows,
+        ntlm_external_findings=ntlm_external_findings,
+        ldap_findings=ldap_findings,
     )
 
     # ------------------------------------------------------------------
@@ -889,6 +923,8 @@ def main():
         "top_stream_suspicion_score": (
             stream_triage_rows[0]["suspicion_score"] if stream_triage_rows else 0
         ),
+        "ntlm_event_count": len(ntlm_events),
+        "ldap_activity_count": len(ldap_activity),
         "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
         "ioc_count": len(iocs),
@@ -938,6 +974,8 @@ def main():
     write_csv(case_output_dir / "expert_info.csv", expert_info_rows)
     write_csv(case_output_dir / "credentials_tshark.csv", credential_tap_rows)
     write_csv(case_output_dir / "stream_triage.csv", stream_triage_rows)
+    write_csv(case_output_dir / "ntlm_activity.csv", ntlm_events)
+    write_csv(case_output_dir / "ldap_activity.csv", ldap_activity)
     write_csv(case_output_dir / "carved_files.csv", carved_files)
     write_csv(case_output_dir / "iocs.csv", iocs)
 

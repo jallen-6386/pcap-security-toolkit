@@ -110,6 +110,9 @@ MITRE_MAP = {
     "EMAIL_ACTIVITY":                     ("T1048",    "Exfiltration",          "Exfiltration Over Alternative Protocol"),
     "HTTP_RESPONSE_ANOMALY":              ("T1105",    "Command and Control",   "Ingress Tool Transfer"),
     "CLEARTEXT_CREDENTIAL":               ("T1552",    "Credential Access",     "Unsecured Credentials"),
+    "NTLM_EXTERNAL_AUTH":                 ("T1187",    "Credential Access",     "Forced Authentication"),
+    "LDAP_CLEARTEXT_BIND":                ("T1552",    "Credential Access",     "Unsecured Credentials"),
+    "LDAP_ENUMERATION":                   ("T1087",    "Discovery",             "Account Discovery"),
 }
 
 ALERT_SEVERITY_MAP = {
@@ -136,6 +139,9 @@ ALERT_SEVERITY_MAP = {
     "EMAIL_ACTIVITY":                     "LOW",
     "HTTP_RESPONSE_ANOMALY":              "MEDIUM",
     "CLEARTEXT_CREDENTIAL":               "HIGH",
+    "NTLM_EXTERNAL_AUTH":                 "MEDIUM",
+    "LDAP_CLEARTEXT_BIND":                "HIGH",
+    "LDAP_ENUMERATION":                   "MEDIUM",
     "FILE_NAME_INDICATOR_OBSERVED":       "LOW",
     "TLS_SNI_OBSERVED":                   "INFO",
 }
@@ -788,6 +794,8 @@ def build_alerts(
     http_response_anomalies=None,
     expert_info_items=None,
     credential_tap_items=None,
+    ntlm_external_findings=None,
+    ldap_findings=None,
 ):
     alerts = []
     http_body_previews = http_body_previews or []
@@ -812,6 +820,8 @@ def build_alerts(
     http_response_anomalies = http_response_anomalies or []
     expert_info_items = expert_info_items or []
     credential_tap_items = credential_tap_items or []
+    ntlm_external_findings = ntlm_external_findings or []
+    ldap_findings = ldap_findings or []
 
     for flow, byte_count in flow_bytes.items():
         src, dst, sport, dport, proto = flow
@@ -1066,6 +1076,26 @@ def build_alerts(
                 f"YARA rule '{item.get('rule_name')}' matched "
                 f"{item.get('file_path', '')}"
             ),
+        }))
+
+    for item in ntlm_external_findings:
+        alerts.append(_enrich_alert({
+            "alert_type": "NTLM_EXTERNAL_AUTH",
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "NTLM",
+            "tcp_stream": item.get("tcp_stream"),
+            "reason": item.get("reason"),
+        }))
+
+    for item in ldap_findings:
+        alerts.append(_enrich_alert({
+            "alert_type": item.get("alert_type", "LDAP_CLEARTEXT_BIND"),
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "LDAP",
+            "tcp_stream": item.get("tcp_stream"),
+            "reason": item.get("reason"),
         }))
 
     # Cleartext credentials recovered by TShark's credentials tap

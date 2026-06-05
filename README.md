@@ -47,6 +47,8 @@ This project uses:
 - FTP RETR/STOR command extraction
 - SMTP/IMAP/POP3 commands and authentication
 - Kerberos authentication events: principal names, realms, error codes, encryption types
+- NTLMSSP authentication: account/domain/host identity, server challenge (forensic capture + external-auth detection)
+- LDAP bind/search activity: cleartext simple-bind detection and directory-enumeration volume
 
 ### Detection Engine (MITRE ATT&CK Mapped)
 | Detection | Alert Type | MITRE |
@@ -72,6 +74,9 @@ This project uses:
 | Internal TCP port scan | `INTERNAL_SCAN_CANDIDATE` | T1046 |
 | HTTP response anomalies (confirmed delivery, scanning) | `HTTP_RESPONSE_ANOMALY` | T1105 |
 | Kerberos errors (AS-REP roasting, Kerberoasting) | `KERBEROS_ANOMALY` | T1558 |
+| NTLM authentication to an external host (relay/leak) | `NTLM_EXTERNAL_AUTH` | T1187 |
+| Cleartext LDAP simple bind (password on the wire) | `LDAP_CLEARTEXT_BIND` | T1552 |
+| LDAP search enumeration (BloodHound/SharpHound) | `LDAP_ENUMERATION` | T1087 |
 | File name indicators (HTTP URI, SMB, FTP) | `FILE_NAME_INDICATOR_OBSERVED` | T1105 |
 | TShark Expert Info anomalies (malformed, protocol, security) | `EXPERT_INFO_ANOMALY` | — |
 
@@ -120,6 +125,7 @@ pcap-security-toolkit/
 │   ├── __init__.py
 │   ├── allowlists.py
 │   ├── arp_detection.py
+│   ├── auth_protocols.py
 │   ├── cases.py
 │   ├── dependencies.py
 │   ├── detections.py
@@ -347,6 +353,8 @@ output/
     ├── ftp_tshark.csv
     ├── smtp_activity.csv
     ├── kerberos_activity.csv
+    ├── ntlm_activity.csv               ← NTLM auth events (account/domain/host)
+    ├── ldap_activity.csv               ← LDAP bind/search activity
     ├── tcp_stream_index.csv
     ├── stream_triage.csv               ← TCP streams ranked by suspicion score
     ├── file_indicators.csv
@@ -449,6 +457,11 @@ Reverse-DNS lookups (`*.in-addr.arpa`, `*.ip6.arpa`) are excluded as normal oper
 ### lateral_movement_candidates.csv
 - `LATERAL_MOVEMENT_CANDIDATE` — single host connected to 3+ internal targets via SMB (port 445)
 - `INTERNAL_SCAN_CANDIDATE` — small TCP connections to 10+ internal IPs or across 10+ ports
+
+### ntlm_activity.csv / ldap_activity.csv
+Forensic records of Windows authentication traffic:
+- `ntlm_activity.csv` — NTLM AUTHENTICATE events: `username`, `domain`, `hostname`, `has_server_challenge`, src/dst/stream. NTLM auth directed at an external host raises a `NTLM_EXTERNAL_AUTH` alert (possible relay/leak).
+- `ldap_activity.csv` — LDAP bind/search operations: `operation`, `bind_dn`, `auth_type`, `base_object`, `result_code`. A cleartext simple bind raises `LDAP_CLEARTEXT_BIND` (HIGH); 100+ search requests from one host raises `LDAP_ENUMERATION` (MEDIUM).
 
 ### stream_triage.csv
 TCP streams ranked by a composite **suspicion score** (highest first) so you can review the most interesting sessions before reading raw stream content:

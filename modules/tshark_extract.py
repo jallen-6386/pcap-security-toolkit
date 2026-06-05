@@ -213,6 +213,39 @@ def extract_tcp_syn_fields(pcap_path):
     )
 
 
+def extract_ntlmssp_fields(pcap_path):
+    """Extract NTLMSSP authentication events for credential-access detection."""
+    fields = [
+        "frame.time",
+        "ip.src",
+        "ip.dst",
+        "tcp.stream",
+        "ntlmssp.messagetype",
+        "ntlmssp.auth.username",
+        "ntlmssp.auth.domain",
+        "ntlmssp.auth.hostname",
+        "ntlmssp.ntlmserverchallenge",
+    ]
+    return run_tshark_fields(pcap_path, fields, display_filter="ntlmssp")
+
+
+def extract_ldap_fields(pcap_path):
+    """Extract LDAP bind/search activity for cleartext-bind and enumeration detection."""
+    fields = [
+        "frame.time",
+        "ip.src",
+        "ip.dst",
+        "tcp.stream",
+        "ldap.protocolOp",
+        "ldap.name",
+        "ldap.authentication",
+        "ldap.simple",
+        "ldap.baseObject",
+        "ldap.resultCode",
+    ]
+    return run_tshark_fields(pcap_path, fields, display_filter="ldap")
+
+
 def extract_tcp_stream_stats(pcap_path):
     """Extract per-packet TCP fields used to score and triage streams."""
     fields = [
