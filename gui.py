@@ -272,6 +272,24 @@ class App(_Root):
             text_color="#888888",
         ).pack(side="left", padx=10)
 
+        # Minimum IOC confidence
+        row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(row, text="Min IOC conf:", width=110, anchor="w").pack(side="left")
+        self.min_ioc_conf_var = tk.StringVar(value="LOW")
+        ctk.CTkOptionMenu(
+            row,
+            variable=self.min_ioc_conf_var,
+            values=["LOW", "MEDIUM", "HIGH"],
+            width=130,
+        ).pack(side="left", padx=(5, 0))
+        ctk.CTkLabel(
+            row,
+            text="(LOW keeps all; MEDIUM drops flow-only IPs/UAs; HIGH only corroborated)",
+            font=ctk.CTkFont(size=11),
+            text_color="#888888",
+        ).pack(side="left", padx=10)
+
         # Modules section header
         ctk.CTkLabel(
             self.input_frame,
@@ -566,6 +584,8 @@ class App(_Root):
 
         cmd += ["--severity-filter", self.severity_var.get()]
         cmd += ["--output-format", self.format_var.get()]
+        if self.min_ioc_conf_var.get() != "LOW":
+            cmd += ["--min-ioc-confidence", self.min_ioc_conf_var.get()]
         return cmd
 
     @staticmethod

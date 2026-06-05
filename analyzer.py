@@ -400,6 +400,14 @@ def main():
         action="store_true",
         help="Actively probe observed TLS servers with JARM fingerprinting (requires outbound connectivity)",
     )
+    parser.add_argument(
+        "--min-ioc-confidence",
+        choices=["LOW", "MEDIUM", "HIGH"],
+        default="LOW",
+        help="Drop IOCs below this confidence from iocs.csv and the STIX bundle "
+             "(default: LOW = keep all). MEDIUM removes low-value flow-only IPs, "
+             "user-agents, and JA4S; HIGH keeps only corroborated indicators.",
+    )
     args = parser.parse_args()
 
     pcap_path = Path(args.pcap)
@@ -777,6 +785,19 @@ def main():
         ja4h_rows=ja4h_rows,
         smtp_attachments=smtp_attachments_list,
     )
+
+    if args.min_ioc_confidence != "LOW":
+        _conf_order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+        threshold = _conf_order[args.min_ioc_confidence]
+        before = len(iocs)
+        iocs = [
+            i for i in iocs
+            if _conf_order.get(i.get("confidence", "LOW"), 0) >= threshold
+        ]
+        print(
+            f"[*] IOC confidence filter ({args.min_ioc_confidence}+): "
+            f"kept {len(iocs)} of {before}"
+        )
 
     # ------------------------------------------------------------------
     # Timeline

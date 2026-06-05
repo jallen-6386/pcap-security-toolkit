@@ -242,7 +242,7 @@ gui.bat
 - Drag-and-drop PCAP files or click Browse
 - Toggle switches for `--export-streams`, `--jarm-probe`, `--yara-rules`, `--geoip-db`
 - Output format selector (CSV + Excel / HTML / Both)
-- Severity-filter dropdown
+- Severity-filter and minimum-IOC-confidence dropdowns
 - Live streaming log with color-coded `[*]`/`[!]`/`[+]` lines
 - Summary card with severity breakdown, top alerts (with MITRE IDs), and detection counts
 - One-click "Open Folder" / "Open Excel Workbook" / "Open HTML Report" buttons
@@ -263,6 +263,7 @@ analyzer.py [-h] [--top N] [--case NAME]
             [--geoip-db PATH]
             [--yara-rules PATH]
             [--jarm-probe]
+            [--min-ioc-confidence {LOW,MEDIUM,HIGH}]
             pcap
 ```
 
@@ -278,6 +279,7 @@ analyzer.py [-h] [--top N] [--case NAME]
 | `--geoip-db` | auto | Path to GeoLite2 .mmdb database file |
 | `--yara-rules` | off | Path to a YARA rules file or directory to scan carved files and payloads |
 | `--jarm-probe` | off | Actively fingerprint observed TLS servers with JARM (requires outbound connectivity) |
+| `--min-ioc-confidence` | LOW | Drop IOCs below this confidence from iocs.csv and the STIX bundle (MEDIUM removes flow-only IPs, user-agents, JA4S; HIGH keeps only corroborated indicators) |
 
 ---
 
@@ -416,6 +418,7 @@ To keep findings actionable, several detectors are tuned against benign noise (n
 - **Suspicious downloads** are tiered: executables/scripts (`.exe`, `.dll`, `.ps1`, `.hta`, …) are HIGH; documents/archives (`.pdf`, `.zip`, `.docm`, …) are MEDIUM — content-based detection (carving + YARA + hashing) still inspects the bytes
 - **TLS SNI morphology** (long/hex-like/digit-heavy) and **high-volume DNS** aggregate checks skip known CDN/cloud parent domains — those heuristics can't distinguish a malicious CDN host from a benign one, so they only add noise. CDN traffic is still fully subject to JA3/JA4, beaconing (by IP), suspicious-download, payload (carving/YARA/hash), and per-query DNS-entropy detection
 - **Multi-User-Agent** flagging requires 15+ distinct UAs from one host (a normal workstation easily shows 10+)
+- **`--min-ioc-confidence`** optionally drops low-value IOCs (flow-only external IPs, user-agents, JA4S) from `iocs.csv` and the STIX bundle; default `LOW` keeps everything
 
 ### malicious_ja3.csv
 TLS sessions matching known-malicious JA3 fingerprints:
