@@ -39,6 +39,24 @@ except ImportError:
 REPO_ROOT = Path(__file__).resolve().parent
 ANALYZER_PATH = REPO_ROOT / "analyzer.py"
 
+
+def resolve_analyzer_python() -> str:
+    """
+    Return the interpreter to run analyzer.py with.
+
+    Prefer the project's virtualenv so the analyzer subprocess always has
+    the toolkit's dependencies (scapy, etc.), regardless of which Python
+    launched the GUI. Falls back to the current interpreter if no venv
+    is present.
+    """
+    if platform.system() == "Windows":
+        venv_python = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = REPO_ROOT / ".venv" / "bin" / "python"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
+
 SEVERITY_COLORS = {
     "CRITICAL": "#E74C3C",
     "HIGH":     "#E67E22",
@@ -513,7 +531,7 @@ class App(_Root):
         self.run_thread.start()
 
     def _build_command(self, pcap_path: Path) -> list[str]:
-        cmd = [sys.executable, "-u", str(ANALYZER_PATH), str(pcap_path)]
+        cmd = [resolve_analyzer_python(), "-u", str(ANALYZER_PATH), str(pcap_path)]
 
         if self.case_var.get().strip():
             cmd += ["--case", self.case_var.get().strip()]
