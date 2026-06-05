@@ -211,3 +211,22 @@ def extract_tcp_syn_fields(pcap_path):
         fields,
         display_filter="tcp.flags.syn == 1 and tcp.flags.ack == 0",
     )
+
+
+def extract_tcp_stream_stats(pcap_path):
+    """Extract per-packet TCP fields used to score and triage streams."""
+    fields = [
+        "tcp.stream",
+        "frame.time_epoch",
+        "frame.len",
+        "ip.src",
+        "tcp.srcport",
+        "ip.dst",
+        "tcp.dstport",
+        "tcp.flags.reset",
+        "tcp.analysis.retransmission",
+        "tcp.analysis.zero_window",
+        "tcp.analysis.lost_segment",
+        "tcp.completeness.str",
+    ]
+    return run_tshark_fields(pcap_path, fields, display_filter="tcp")

@@ -87,6 +87,7 @@ This project uses:
 - Optional GeoIP/ASN enrichment via `maxminddb` and GeoLite2 database
 
 ### Payload Analysis
+- TCP stream triage: streams ranked by a composite suspicion score (content signals, direction, volume, TCP health) so the most interesting sessions surface first
 - Passive OS fingerprinting from TCP SYN characteristics (TTL, window size, MSS)
 - SMTP attachment extraction and hashing from exported streams
 - YARA rule scanning on carved files and extracted payloads
@@ -139,6 +140,7 @@ pcap-security-toolkit/
 │   ├── protocol_anomalies.py
 │   ├── smtp_attachments.py
 │   ├── stix_export.py
+│   ├── stream_triage.py
 │   ├── streams.py
 │   ├── tshark_capabilities.py
 │   ├── tshark_extract.py
@@ -346,6 +348,7 @@ output/
     ├── smtp_activity.csv
     ├── kerberos_activity.csv
     ├── tcp_stream_index.csv
+    ├── stream_triage.csv               ← TCP streams ranked by suspicion score
     ├── file_indicators.csv
     ├── beaconing_candidates.csv
     ├── credential_findings.csv
@@ -385,6 +388,7 @@ output/
 - `kerberos_activity.csv` + `smtp_activity.csv`
 
 ### 4. File and payload analysis
+- `stream_triage.csv` — start with the highest-scoring streams, then pull their content from `streams/`
 - `extracted_payloads_index.csv` + `extracted_payloads/`
 - `carved_files.csv` + `carved_files/`
 - `credential_findings.csv` + `credential_posts.csv`
@@ -445,6 +449,13 @@ Reverse-DNS lookups (`*.in-addr.arpa`, `*.ip6.arpa`) are excluded as normal oper
 ### lateral_movement_candidates.csv
 - `LATERAL_MOVEMENT_CANDIDATE` — single host connected to 3+ internal targets via SMB (port 445)
 - `INTERNAL_SCAN_CANDIDATE` — small TCP connections to 10+ internal IPs or across 10+ ports
+
+### stream_triage.csv
+TCP streams ranked by a composite **suspicion score** (highest first) so you can review the most interesting sessions before reading raw stream content:
+- `tcp_stream`, `src_ip`, `dst_ip`, `dst_port`, `packet_count`, `total_bytes`, `client_bytes`, `server_bytes`, `duration_sec`
+- `resets`, `retransmissions`, `zero_windows`, `lost_segments`, `completeness` (TCP health — light weight, usually network conditions)
+- `has_carved_file`, `has_payload`, `has_credential`, `suspicion_score`, `reasons`
+- Score is driven mainly by content signals (carved files, extracted payloads, credentials, high entropy), external destination, and upload-heavy direction; TCP health flags only sharpen ranking. This is a navigational ranking, not new alerts — the underlying signals raise their own alerts.
 
 ### protocol_hierarchy.csv
 Protocol breakdown of the capture from TShark's `-z io,phs` tap:

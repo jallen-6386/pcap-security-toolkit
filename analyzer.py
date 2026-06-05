@@ -85,8 +85,10 @@ from modules.tshark_extract import (
     extract_kerberos_fields,
     extract_smtp_fields,
     extract_smb_fields,
+    extract_tcp_stream_stats,
     extract_tcp_syn_fields,
 )
+from modules.stream_triage import score_streams
 from modules.utils import is_noise_ip
 
 
@@ -149,6 +151,10 @@ def print_report_summary(report: dict, alerts: list[dict], severity_filter: str)
     )
     print(f"HTTP Response Anomalies:    {report.get('http_response_anomaly_count', 0)}")
     print(f"Carved Files:               {report.get('carved_file_count', 0)}")
+    print(
+        f"Top Stream Suspicion:       {report.get('top_stream_suspicion_score', 0)} "
+        f"(of {report.get('stream_triage_count', 0)} streams)"
+    )
     print(f"IOCs Extracted:             {report.get('ioc_count', 0)}")
     print(f"Alerts:                     {report.get('alerts_count', 0)}")
 
@@ -473,6 +479,8 @@ def main():
     protocol_hierarchy_rows = []
     expert_info_rows = []
     credential_tap_rows = []
+    stream_stats_rows = []
+    stream_triage_rows = []
 
     # ------------------------------------------------------------------
     # TShark-assisted extraction
@@ -499,6 +507,7 @@ def main():
             "arp":          extract_arp_fields,
             "syn":          extract_tcp_syn_fields,
             "stream_index": extract_tcp_stream_index,
+            "stream_stats": extract_tcp_stream_stats,
             "tls":          extract_tls_metadata,
         }
         extraction_results: dict = {}
@@ -527,6 +536,7 @@ def main():
         arp_rows, arp_err = extraction_results["arp"]
         syn_rows, syn_err = extraction_results["syn"]
         tcp_stream_rows, stream_err = extraction_results["stream_index"]
+        stream_stats_rows, stream_stats_err = extraction_results["stream_stats"]
         tls_rows, tls_err = extraction_results["tls"]
 
         for label, err in [
@@ -541,6 +551,7 @@ def main():
             ("ARP", arp_err),
             ("TCP SYN", syn_err),
             ("TCP stream index", stream_err),
+            ("TCP stream stats", stream_stats_err),
             ("TLS metadata", tls_err),
             ("Protocol hierarchy", phs_err),
             ("Expert Info", expert_err),
@@ -720,6 +731,15 @@ def main():
         print("[*] Running JARM fingerprinting (active probing)")
         jarm_results = probe_observed_servers(tls_summary)
 
+    if stream_stats_rows:
+        print("[*] Scoring TCP streams for triage")
+        stream_triage_rows = score_streams(
+            stream_stats_rows,
+            extracted_payloads=extracted_payloads,
+            carved_files=carved_files,
+            credential_findings=credential_findings,
+        )
+
     # ------------------------------------------------------------------
     # GeoIP enrichment (optional)
     # ------------------------------------------------------------------
@@ -865,6 +885,10 @@ def main():
             1 for r in expert_info_rows if r.get("severity") == "Error"
         ),
         "cleartext_credential_count": len(credential_tap_rows),
+        "stream_triage_count": len(stream_triage_rows),
+        "top_stream_suspicion_score": (
+            stream_triage_rows[0]["suspicion_score"] if stream_triage_rows else 0
+        ),
         "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
         "ioc_count": len(iocs),
@@ -913,6 +937,7 @@ def main():
     write_csv(case_output_dir / "protocol_hierarchy.csv", protocol_hierarchy_rows)
     write_csv(case_output_dir / "expert_info.csv", expert_info_rows)
     write_csv(case_output_dir / "credentials_tshark.csv", credential_tap_rows)
+    write_csv(case_output_dir / "stream_triage.csv", stream_triage_rows)
     write_csv(case_output_dir / "carved_files.csv", carved_files)
     write_csv(case_output_dir / "iocs.csv", iocs)
 
