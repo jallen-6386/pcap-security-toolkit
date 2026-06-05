@@ -6,7 +6,7 @@ fingerprints from all analysis results and outputs a deduplicated iocs.csv
 that can be imported into MISP, OpenCTI, TheHive, or a SIEM block-rule pipeline.
 """
 
-from modules.allowlists import is_benign_resolver, is_cdn_or_cloud_domain
+from modules.allowlists import is_benign_resolver
 from modules.utils import is_noise_ip
 
 
@@ -40,13 +40,12 @@ def extract_iocs(
             geo = {}
             if ioc_type == "ipv4":
                 geo = geoip_map.get(value, {})
-            # Annotate (don't drop) well-known benign infrastructure so a SIEM
-            # import can filter it out instead of block-listing a resolver/CDN.
-            benign_infra = False
-            if ioc_type == "ipv4":
-                benign_infra = is_benign_resolver(value)
-            elif ioc_type == "domain":
-                benign_infra = is_cdn_or_cloud_domain(value)
+            # Annotate (don't drop) well-known benign endpoints so a SIEM import
+            # can filter them instead of block-listing a public resolver. Only
+            # genuinely-benign endpoints qualify — CDN/cloud domains are NOT
+            # marked benign, because a specific distribution/host on a trusted
+            # CDN can itself be malicious (phishing kits, C2 redirectors).
+            benign_infra = ioc_type == "ipv4" and is_benign_resolver(value)
             iocs[key] = {
                 "ioc_type": ioc_type,
                 "value": value,

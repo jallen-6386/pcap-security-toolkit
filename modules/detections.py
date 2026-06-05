@@ -430,20 +430,22 @@ def detect_tls_sni_anomalies(tls_summary: list[dict]) -> list[dict]:
         if not sni:
             continue
 
-        # CDN/cloud hostnames are legitimately long, hex-like and digit-heavy;
-        # the heuristics below would flag them as anomalies, so skip them.
-        if is_cdn_or_cloud_domain(sni):
-            continue
-
         reasons = []
-        if len(sni) > 55:
-            reasons.append("Long SNI")
+        # Morphology heuristics (long/hex-like/digit-heavy) can't distinguish a
+        # malicious CDN host from a benign one — both look the same — so they
+        # only add noise on CDN/cloud domains and are skipped there. The
+        # structural checks below (IP literal, suspicious TLD) still apply, and
+        # CDN traffic remains subject to JA3/JA4, beaconing, suspicious-download
+        # and payload detection elsewhere.
+        if not is_cdn_or_cloud_domain(sni):
+            if len(sni) > 55:
+                reasons.append("Long SNI")
+            if re.search(r"[a-f0-9]{20,}", sni):
+                reasons.append("Hex-like SNI pattern")
+            if sum(ch.isdigit() for ch in sni) > 10:
+                reasons.append("Digit-heavy SNI")
         if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", sni):
             reasons.append("SNI is an IP literal")
-        if re.search(r"[a-f0-9]{20,}", sni):
-            reasons.append("Hex-like SNI pattern")
-        if sum(ch.isdigit() for ch in sni) > 10:
-            reasons.append("Digit-heavy SNI")
         if any(sni.endswith(suffix) for suffix in SUSPICIOUS_SNI_SUFFIXES):
             reasons.append("Suspicious SNI suffix")
 
