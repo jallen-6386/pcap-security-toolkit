@@ -797,6 +797,7 @@ class App(_Root):
             ("Expert Info errors",   report_data.get("expert_error_count", 0)),
             ("Top stream score",     report_data.get("top_stream_suspicion_score", 0)),
             ("NTLM auth events",     report_data.get("ntlm_event_count", 0)),
+            ("DCERPC binds",         report_data.get("dcerpc_bind_count", 0)),
         ]
         for i, (label, value) in enumerate(stats):
             row = i // 3

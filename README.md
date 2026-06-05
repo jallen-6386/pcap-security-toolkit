@@ -49,6 +49,7 @@ This project uses:
 - Kerberos authentication events: principal names, realms, error codes, encryption types
 - NTLMSSP authentication: account/domain/host identity, server challenge (forensic capture + external-auth detection)
 - LDAP bind/search activity: cleartext simple-bind detection and directory-enumeration volume
+- DCERPC interface binds: maps well-known interface UUIDs to lateral-movement techniques (DCSync, PetitPotam, remote task scheduling, service control)
 
 ### Detection Engine (MITRE ATT&CK Mapped)
 | Detection | Alert Type | MITRE |
@@ -77,6 +78,9 @@ This project uses:
 | NTLM authentication to an external host (relay/leak) | `NTLM_EXTERNAL_AUTH` | T1187 |
 | Cleartext LDAP simple bind (password on the wire) | `LDAP_CLEARTEXT_BIND` | T1552 |
 | LDAP search enumeration (BloodHound/SharpHound) | `LDAP_ENUMERATION` | T1087 |
+| DCERPC bind to DRSUAPI (DCSync) | `DCERPC_DCSYNC` | T1003.006 |
+| DCERPC bind to MS-EFSR (PetitPotam coercion) | `DCERPC_FORCED_AUTH` | T1187 |
+| DCERPC bind to task scheduler (atsvc/tsch) | `DCERPC_SCHEDULED_TASK` | T1053.005 |
 | File name indicators (HTTP URI, SMB, FTP) | `FILE_NAME_INDICATOR_OBSERVED` | T1105 |
 | TShark Expert Info anomalies (malformed, protocol, security) | `EXPERT_INFO_ANOMALY` | — |
 
@@ -129,6 +133,7 @@ pcap-security-toolkit/
 │   ├── cases.py
 │   ├── dependencies.py
 │   ├── detections.py
+│   ├── dcerpc.py
 │   ├── dns_http_tls.py
 │   ├── excel_export.py
 │   ├── exporters.py
@@ -355,6 +360,7 @@ output/
     ├── kerberos_activity.csv
     ├── ntlm_activity.csv               ← NTLM auth events (account/domain/host)
     ├── ldap_activity.csv               ← LDAP bind/search activity
+    ├── dcerpc_activity.csv             ← DCERPC interface binds (lateral movement)
     ├── tcp_stream_index.csv
     ├── stream_triage.csv               ← TCP streams ranked by suspicion score
     ├── file_indicators.csv
@@ -458,10 +464,11 @@ Reverse-DNS lookups (`*.in-addr.arpa`, `*.ip6.arpa`) are excluded as normal oper
 - `LATERAL_MOVEMENT_CANDIDATE` — single host connected to 3+ internal targets via SMB (port 445)
 - `INTERNAL_SCAN_CANDIDATE` — small TCP connections to 10+ internal IPs or across 10+ ports
 
-### ntlm_activity.csv / ldap_activity.csv
-Forensic records of Windows authentication traffic:
+### ntlm_activity.csv / ldap_activity.csv / dcerpc_activity.csv
+Forensic records of Windows authentication and RPC traffic:
 - `ntlm_activity.csv` — NTLM AUTHENTICATE events: `username`, `domain`, `hostname`, `has_server_challenge`, src/dst/stream. NTLM auth directed at an external host raises a `NTLM_EXTERNAL_AUTH` alert (possible relay/leak).
 - `ldap_activity.csv` — LDAP bind/search operations: `operation`, `bind_dn`, `auth_type`, `base_object`, `result_code`. A cleartext simple bind raises `LDAP_CLEARTEXT_BIND` (HIGH); 100+ search requests from one host raises `LDAP_ENUMERATION` (MEDIUM).
+- `dcerpc_activity.csv` — binds to recognized DCERPC interfaces: `interface`, `uuid`, `mitre_technique_id`, `alert_worthy`, src/dst/stream. Rare high-signal interfaces (DRSUAPI/DCSync, MS-EFSR/PetitPotam, task scheduler) raise alerts; common-but-abusable interfaces (svcctl, samr, lsarpc, winreg, srvsvc, spoolss) are recorded with their technique label but not alerted, to keep false positives low.
 
 ### stream_triage.csv
 TCP streams ranked by a composite **suspicion score** (highest first) so you can review the most interesting sessions before reading raw stream content:

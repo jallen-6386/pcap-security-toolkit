@@ -113,6 +113,9 @@ MITRE_MAP = {
     "NTLM_EXTERNAL_AUTH":                 ("T1187",    "Credential Access",     "Forced Authentication"),
     "LDAP_CLEARTEXT_BIND":                ("T1552",    "Credential Access",     "Unsecured Credentials"),
     "LDAP_ENUMERATION":                   ("T1087",    "Discovery",             "Account Discovery"),
+    "DCERPC_DCSYNC":                      ("T1003.006","Credential Access",     "OS Credential Dumping: DCSync"),
+    "DCERPC_FORCED_AUTH":                 ("T1187",    "Credential Access",     "Forced Authentication"),
+    "DCERPC_SCHEDULED_TASK":              ("T1053.005","Execution",             "Scheduled Task/Job: Scheduled Task"),
 }
 
 ALERT_SEVERITY_MAP = {
@@ -142,6 +145,9 @@ ALERT_SEVERITY_MAP = {
     "NTLM_EXTERNAL_AUTH":                 "MEDIUM",
     "LDAP_CLEARTEXT_BIND":                "HIGH",
     "LDAP_ENUMERATION":                   "MEDIUM",
+    "DCERPC_DCSYNC":                      "HIGH",
+    "DCERPC_FORCED_AUTH":                 "MEDIUM",
+    "DCERPC_SCHEDULED_TASK":              "MEDIUM",
     "FILE_NAME_INDICATOR_OBSERVED":       "LOW",
     "TLS_SNI_OBSERVED":                   "INFO",
 }
@@ -796,6 +802,7 @@ def build_alerts(
     credential_tap_items=None,
     ntlm_external_findings=None,
     ldap_findings=None,
+    dcerpc_findings=None,
 ):
     alerts = []
     http_body_previews = http_body_previews or []
@@ -822,6 +829,7 @@ def build_alerts(
     credential_tap_items = credential_tap_items or []
     ntlm_external_findings = ntlm_external_findings or []
     ldap_findings = ldap_findings or []
+    dcerpc_findings = dcerpc_findings or []
 
     for flow, byte_count in flow_bytes.items():
         src, dst, sport, dport, proto = flow
@@ -1094,6 +1102,16 @@ def build_alerts(
             "src_ip": item.get("src_ip"),
             "dst_ip": item.get("dst_ip"),
             "protocol": "LDAP",
+            "tcp_stream": item.get("tcp_stream"),
+            "reason": item.get("reason"),
+        }))
+
+    for item in dcerpc_findings:
+        alerts.append(_enrich_alert({
+            "alert_type": item.get("alert_type", "DCERPC_DCSYNC"),
+            "src_ip": item.get("src_ip"),
+            "dst_ip": item.get("dst_ip"),
+            "protocol": "DCERPC",
             "tcp_stream": item.get("tcp_stream"),
             "reason": item.get("reason"),
         }))

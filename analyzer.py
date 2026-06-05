@@ -81,6 +81,7 @@ from modules.tshark_extract import (
     extract_ftp_fields,
     extract_http_fields,
     extract_http_response_fields,
+    extract_dcerpc_fields,
     extract_icmp_fields,
     extract_kerberos_fields,
     extract_ldap_fields,
@@ -96,6 +97,7 @@ from modules.auth_protocols import (
     summarize_ldap_activity,
     summarize_ntlm_events,
 )
+from modules.dcerpc import detect_dcerpc_abuse, summarize_dcerpc_binds
 from modules.stream_triage import score_streams
 from modules.utils import is_noise_ip
 
@@ -138,6 +140,7 @@ def print_report_summary(report: dict, alerts: list[dict], severity_filter: str)
     print(f"Cleartext Credentials:      {report.get('cleartext_credential_count', 0)}")
     print(f"NTLM Auth Events:           {report.get('ntlm_event_count', 0)}")
     print(f"LDAP Activity Rows:         {report.get('ldap_activity_count', 0)}")
+    print(f"DCERPC Interface Binds:     {report.get('dcerpc_bind_count', 0)}")
     print(f"Suspicious Downloads:       {report.get('suspicious_download_count', 0)}")
     print(f"Entropy Exfil Candidates:   {report.get('entropy_exfil_candidate_count', 0)}")
     print(f"Beaconing Candidates:       {report.get('beaconing_candidate_count', 0)}")
@@ -497,6 +500,9 @@ def main():
     ntlm_external_findings = []
     ldap_activity = []
     ldap_findings = []
+    dcerpc_rows = []
+    dcerpc_binds = []
+    dcerpc_findings = []
 
     # ------------------------------------------------------------------
     # TShark-assisted extraction
@@ -526,6 +532,7 @@ def main():
             "stream_stats": extract_tcp_stream_stats,
             "ntlmssp":      extract_ntlmssp_fields,
             "ldap":         extract_ldap_fields,
+            "dcerpc":       extract_dcerpc_fields,
             "tls":          extract_tls_metadata,
         }
         extraction_results: dict = {}
@@ -557,6 +564,7 @@ def main():
         stream_stats_rows, stream_stats_err = extraction_results["stream_stats"]
         ntlm_rows, ntlm_err = extraction_results["ntlmssp"]
         ldap_rows, ldap_err = extraction_results["ldap"]
+        dcerpc_rows, dcerpc_err = extraction_results["dcerpc"]
         tls_rows, tls_err = extraction_results["tls"]
 
         for label, err in [
@@ -574,6 +582,7 @@ def main():
             ("TCP stream stats", stream_stats_err),
             ("NTLMSSP", ntlm_err),
             ("LDAP", ldap_err),
+            ("DCERPC", dcerpc_err),
             ("TLS metadata", tls_err),
             ("Protocol hierarchy", phs_err),
             ("Expert Info", expert_err),
@@ -748,6 +757,11 @@ def main():
         ldap_activity = summarize_ldap_activity(ldap_rows)
         ldap_findings = detect_ldap_findings(ldap_rows)
 
+    if dcerpc_rows:
+        print("[*] Analyzing DCERPC interface binds")
+        dcerpc_binds = summarize_dcerpc_binds(dcerpc_rows)
+        dcerpc_findings = detect_dcerpc_abuse(dcerpc_binds)
+
     if args.yara_rules:
         yara_rules_compiled = load_rules(args.yara_rules)
         if yara_rules_compiled:
@@ -821,6 +835,7 @@ def main():
         credential_tap_items=credential_tap_rows,
         ntlm_external_findings=ntlm_external_findings,
         ldap_findings=ldap_findings,
+        dcerpc_findings=dcerpc_findings,
     )
 
     # ------------------------------------------------------------------
@@ -925,6 +940,7 @@ def main():
         ),
         "ntlm_event_count": len(ntlm_events),
         "ldap_activity_count": len(ldap_activity),
+        "dcerpc_bind_count": len(dcerpc_binds),
         "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
         "ioc_count": len(iocs),
@@ -976,6 +992,7 @@ def main():
     write_csv(case_output_dir / "stream_triage.csv", stream_triage_rows)
     write_csv(case_output_dir / "ntlm_activity.csv", ntlm_events)
     write_csv(case_output_dir / "ldap_activity.csv", ldap_activity)
+    write_csv(case_output_dir / "dcerpc_activity.csv", dcerpc_binds)
     write_csv(case_output_dir / "carved_files.csv", carved_files)
     write_csv(case_output_dir / "iocs.csv", iocs)
 

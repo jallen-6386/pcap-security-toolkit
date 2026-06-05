@@ -246,6 +246,19 @@ def extract_ldap_fields(pcap_path):
     return run_tshark_fields(pcap_path, fields, display_filter="ldap")
 
 
+def extract_dcerpc_fields(pcap_path):
+    """Extract DCERPC interface binds for lateral-movement detection."""
+    fields = [
+        "frame.time",
+        "ip.src",
+        "ip.dst",
+        "tcp.stream",
+        "dcerpc.cn_bind_to_uuid",
+        "dcerpc.cn_bind_if_ver",
+    ]
+    return run_tshark_fields(pcap_path, fields, display_filter="dcerpc")
+
+
 def extract_tcp_stream_stats(pcap_path):
     """Extract per-packet TCP fields used to score and triage streams."""
     fields = [
