@@ -83,10 +83,20 @@ if _HAS_DND:
     class _Root(TkinterDnD.DnDWrapper, ctk.CTk):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            self.TkdndVersion = TkinterDnD._require(self)
+            # tkinterdnd2 can import successfully but still fail to load its
+            # native tkdnd library at runtime (e.g. a Tcl/Tk stubs mismatch on
+            # some Python builds). Degrade to Browse-only instead of crashing.
+            self.dnd_available = False
+            try:
+                self.TkdndVersion = TkinterDnD._require(self)
+                self.dnd_available = True
+            except Exception:
+                self.dnd_available = False
 else:
     class _Root(ctk.CTk):
-        pass
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.dnd_available = False
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +177,7 @@ class App(_Root):
         self._build_output_panel()
         self._build_status_bar()
 
-        if _HAS_DND:
+        if self.dnd_available:
             self.drop_target_register(DND_FILES)
             self.dnd_bind("<<Drop>>", self._on_drop)
 
@@ -194,8 +204,8 @@ class App(_Root):
         title.pack(side="left")
 
         subtitle_text = "v2.3.0"
-        if not _HAS_DND:
-            subtitle_text += "   (drag-and-drop disabled — install tkinterdnd2)"
+        if not self.dnd_available:
+            subtitle_text += "   (drag-and-drop unavailable — use Browse)"
         subtitle = ctk.CTkLabel(
             header,
             text=subtitle_text,
@@ -221,7 +231,7 @@ class App(_Root):
         row.pack(fill="x", padx=15, pady=(15, 5))
         ctk.CTkLabel(row, text="PCAP file:", width=110, anchor="w").pack(side="left")
         self.pcap_var = tk.StringVar()
-        placeholder = "Drop file here or click Browse" if _HAS_DND else "Click Browse to select a .pcap or .pcapng"
+        placeholder = "Drop file here or click Browse" if self.dnd_available else "Click Browse to select a .pcap or .pcapng"
         self.pcap_entry = ctk.CTkEntry(row, textvariable=self.pcap_var, placeholder_text=placeholder)
         self.pcap_entry.pack(side="left", fill="x", expand=True, padx=(5, 5))
         ctk.CTkButton(row, text="Browse", width=90, command=self._browse_pcap).pack(side="left")
