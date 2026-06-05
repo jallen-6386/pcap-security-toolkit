@@ -491,7 +491,7 @@ Matches from `--yara-rules` scanning over carved files, extracted payloads, and 
 - `rule`, `tags`, `severity` (from rule meta or tags), `matched_strings`, target file path, sha256
 
 ### iocs.stix2.json
-STIX 2.1 bundle containing one Indicator object per IOC, ready for import into MISP, OpenCTI, or TheHive. Indicator IDs are deterministic across runs (UUIDv5) so the same IOC always gets the same STIX ID.
+STIX 2.1 bundle containing one Indicator object per IOC, ready for import into MISP, OpenCTI, or TheHive. Indicator IDs are deterministic across runs (UUIDv5) so the same IOC always gets the same STIX ID. IOCs flagged `benign_infra` (public DNS resolvers) are excluded from the bundle — a STIX Indicator asserts malicious activity — but remain visible, annotated, in `iocs.csv`.
 
 ### analysis_workbook.xlsx
 All non-empty CSVs consolidated into a single Excel workbook, one sheet per file, ordered by investigative priority (alerts → iocs → timeline → detections → raw protocol data). Opens natively in Microsoft Excel, Google Sheets, and Apple Numbers.

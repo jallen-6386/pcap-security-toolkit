@@ -99,6 +99,12 @@ def export_stix_bundle(iocs: list[dict], case_name: str = "") -> str:
         if not value:
             continue
 
+        # A STIX Indicator asserts "this pattern indicates malicious activity",
+        # so never emit known-benign endpoints (public resolvers) into the
+        # bundle — they remain visible, annotated, in iocs.csv.
+        if ioc.get("benign_infra"):
+            continue
+
         pattern_fn = _STIX_PATTERN.get(ioc_type)
         if pattern_fn is None:
             continue
