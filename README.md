@@ -164,6 +164,8 @@ pcap-security-toolkit/
 │   └── yara_scanner.py
 ├── rules/
 │   └── suspicious_strings.yar
+├── intel/
+├── tests/
 ├── output/
 └── samples/
 ```
@@ -581,6 +583,24 @@ The toolkit is built to handle large captures (300,000+ packets) without loading
 - `--export-streams` adds two TShark follow passes per stream. Keep `--max-streams` modest (default 25) on large files; raise it only when you need deeper payload coverage.
 - `--jarm-probe` makes live outbound network connections and is the slowest optional step — enable it only when you intend to fingerprint observed servers.
 - Lower `TSHARK_MAX_WORKERS` if running on a memory-constrained host, or raise it on a many-core workstation.
+
+---
+
+## Testing
+
+The detection and parsing logic is covered by a `unittest` suite (no extra
+dependencies required):
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+```
+
+It validates IP classification, the false-positive tuning (DNS, beaconing,
+downloads, SNI, multi-UA), the NTLM/LDAP/DCERPC detections, the threat-intel
+feed loader, the Excel row-limit handling, the YARA ruleset (compiles + matches
+known-malicious samples while leaving benign content clean), the TCP
+stream-triage scoring, and the TShark statistics parsers. Tests that need an
+optional package (openpyxl, yara) skip cleanly when it is absent.
 
 ---
 
