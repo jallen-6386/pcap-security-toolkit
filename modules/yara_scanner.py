@@ -42,7 +42,10 @@ def load_rules(rules_path: str):
             return _yara.compile(filepaths=filepaths)
         else:
             return _yara.compile(filepath=str(path))
-    except Exception:
+    except Exception as exc:
+        # Surface compile errors (e.g. a malformed rule) instead of silently
+        # disabling scanning, which previously hid a broken ruleset.
+        print(f"[!] YARA rule compilation failed for {path}: {exc}")
         return None
 
 
