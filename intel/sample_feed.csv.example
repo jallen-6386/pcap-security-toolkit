@@ -1,0 +1,14 @@
+# Example threat-intel feed. Rename to ja3_*.csv / ja4_*.csv / jarm_*.csv to load it.
+# Lines starting with # are ignored.
+#
+# abuse.ch format: <hash>,<first_seen>,<last_seen>,<reason>
+# simple format:   <fingerprint>,<label>[,<source>]
+# bare format:     <fingerprint>
+#
+# The entries below are illustrative placeholders, NOT real intel — replace
+# them with a downloaded feed (see README.md for sources).
+#
+# simple format example:
+0000000000000000000000000000aaaa,Example Malware Family,my-feed
+# abuse.ch format example:
+0000000000000000000000000000bbbb,2024-01-01 00:00:00,2024-06-01 00:00:00,ExampleListingReason

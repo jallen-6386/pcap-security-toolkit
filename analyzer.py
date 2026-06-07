@@ -20,7 +20,7 @@ except ImportError:
     print("    python -m pip install -r requirements.txt --no-user")
     sys.exit(1)
 
-from config import OUTPUT_DIR, TSHARK_MAX_WORKERS
+from config import BASE_DIR, OUTPUT_DIR, TSHARK_MAX_WORKERS
 from modules.cases import get_case_output_dir
 from modules.dependencies import has_tshark
 from modules.detections import (
@@ -100,6 +100,7 @@ from modules.auth_protocols import (
 from modules.dcerpc import detect_dcerpc_abuse, summarize_dcerpc_binds
 from modules.http_objects import export_http_objects
 from modules.tshark_config import is_valid_decode_as, set_decode_as
+from modules.threat_intel import load_intel_feeds
 from modules.stream_triage import score_streams
 from modules.utils import is_noise_ip
 
@@ -438,6 +439,12 @@ def main():
              "--decode-as tcp.port==8888,http (repeatable). Applies to all "
              "TShark extraction, statistics, and JA4 passes.",
     )
+    parser.add_argument(
+        "--intel-dir",
+        metavar="PATH",
+        help="Directory of JA3/JA4/JARM threat-intel feed CSVs to merge into "
+             "the detection tables (default: the project's intel/ directory).",
+    )
     args = parser.parse_args()
 
     pcap_path = Path(args.pcap)
@@ -460,6 +467,16 @@ def main():
     if decode_as_rules:
         set_decode_as(decode_as_rules)
         print(f"[*] Decode-as rules active: {', '.join(decode_as_rules)}")
+
+    # Merge external threat-intel feeds into the JA3/JA4/JARM detection tables.
+    intel_dir = Path(args.intel_dir) if args.intel_dir else (BASE_DIR / "intel")
+    intel_counts = load_intel_feeds(intel_dir)
+    if any(intel_counts.values()):
+        print(
+            f"[*] Loaded threat-intel feeds from {intel_dir}: "
+            f"+{intel_counts['ja3']} JA3, +{intel_counts['ja4']} JA4, "
+            f"+{intel_counts['jarm']} JARM"
+        )
 
     # ------------------------------------------------------------------
     # Packet-level analysis — two streaming passes to avoid loading into RAM
@@ -979,6 +996,7 @@ def main():
         "case_output_dir": str(case_output_dir),
         "geoip_enabled": enricher.available,
         "decode_as_rules": decode_as_rules,
+        "intel_feed_counts": intel_counts,
     }
 
     # ------------------------------------------------------------------

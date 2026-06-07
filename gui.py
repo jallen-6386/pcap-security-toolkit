@@ -301,6 +301,18 @@ class App(_Root):
             placeholder_text="e.g. tcp.port==8888,http  (space-separate multiple rules)",
         ).pack(side="left", fill="x", expand=True, padx=(5, 0))
 
+        # Threat-intel feed directory (optional override; default is intel/)
+        row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(row, text="Intel dir:", width=110, anchor="w").pack(side="left")
+        self.intel_dir_var = tk.StringVar()
+        ctk.CTkEntry(
+            row,
+            textvariable=self.intel_dir_var,
+            placeholder_text="JA3/JA4/JARM feed CSVs (blank = project intel/ folder)",
+        ).pack(side="left", fill="x", expand=True, padx=(5, 5))
+        ctk.CTkButton(row, text="Browse", width=90, command=self._browse_intel_dir).pack(side="left")
+
         # Modules section header
         ctk.CTkLabel(
             self.input_frame,
@@ -473,6 +485,11 @@ class App(_Root):
             self.geoip_path_var.set(path)
             self.geoip_var.set(True)
 
+    def _browse_intel_dir(self):
+        path = filedialog.askdirectory(title="Select threat-intel feed directory")
+        if path:
+            self.intel_dir_var.set(path)
+
     # ------------------------------------------------------------------
     # Drag-and-drop
     # ------------------------------------------------------------------
@@ -600,6 +617,8 @@ class App(_Root):
         for rule in self.decode_as_var.get().split():
             if rule.strip():
                 cmd += ["--decode-as", rule.strip()]
+        if self.intel_dir_var.get().strip():
+            cmd += ["--intel-dir", self.intel_dir_var.get().strip()]
         return cmd
 
     @staticmethod
