@@ -5,6 +5,7 @@ from unittest import mock
 
 from modules.stream_triage import score_streams
 from modules import tshark_stats
+from modules import tshark_config
 
 
 class TestStreamTriage(unittest.TestCase):
@@ -101,6 +102,28 @@ class TestTsharkParsers(unittest.TestCase):
         self.assertIsNone(err)
         self.assertEqual(rows[0]["protocol"], "HTTP basic auth")
         self.assertEqual(rows[0]["username"], "bob")
+
+
+class TestTsharkRuntimeArgs(unittest.TestCase):
+    def tearDown(self):
+        tshark_config.set_decode_as([])
+        tshark_config.set_tls_keylog("")
+
+    def test_decode_as_and_keylog_combined(self):
+        tshark_config.set_decode_as(["tcp.port==8888,http"])
+        tshark_config.set_tls_keylog("/tmp/keys.log")
+        args = tshark_config.runtime_args()
+        self.assertIn("-d", args)
+        self.assertIn("tcp.port==8888,http", args)
+        self.assertIn("tls.keylog_file:/tmp/keys.log", args)
+
+    def test_empty_by_default(self):
+        self.assertEqual(tshark_config.runtime_args(), [])
+
+    def test_decode_as_validation(self):
+        self.assertTrue(tshark_config.is_valid_decode_as("tcp.port==8888,http"))
+        self.assertFalse(tshark_config.is_valid_decode_as("garbage"))
+        self.assertFalse(tshark_config.is_valid_decode_as("tcp.port==8888"))
 
 
 if __name__ == "__main__":

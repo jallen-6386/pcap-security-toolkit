@@ -39,6 +39,7 @@ This project uses:
 - Version-aware field extraction — unsupported display-filter fields are detected via `tshark -G fields` and dropped before extraction, so one unavailable field (e.g. a JA4 field on older TShark) can't fail an entire pass
 - Name resolution disabled (`-n`) on all TShark calls for deterministic, faster offline analysis
 - `--decode-as` forces a dissector for traffic on non-standard ports (e.g. HTTP/TLS C2 on tcp.port 8888), applied across every extraction, statistics, and JA4 pass
+- `--tls-keylog` decrypts TLS sessions when the secrets are available (SSLKEYLOGFILE), so HTTPS requests, credentials, objects, and JA4H are extracted as if plaintext
 
 ### Protocol Extraction (TShark)
 - HTTP requests and responses (including response codes and server headers)
@@ -261,7 +262,7 @@ gui.bat
 - Drag-and-drop PCAP files or click Browse
 - Toggle switches for `--export-streams`, `--jarm-probe`, `--yara-rules`, `--geoip-db`
 - Output format selector (CSV + Excel / HTML / Both)
-- Severity-filter and minimum-IOC-confidence dropdowns, plus a decode-as field for non-standard ports
+- Severity-filter and minimum-IOC-confidence dropdowns, plus decode-as, threat-intel directory, and TLS key-log fields
 - Live streaming log with color-coded `[*]`/`[!]`/`[+]` lines
 - Summary card with severity breakdown, top alerts (with MITRE IDs), and detection counts
 - One-click "Open Folder" / "Open Excel Workbook" / "Open HTML Report" buttons
@@ -284,6 +285,7 @@ analyzer.py [-h] [--top N] [--case NAME]
             [--jarm-probe]
             [--min-ioc-confidence {LOW,MEDIUM,HIGH}]
             [--decode-as RULE]
+            [--intel-dir PATH] [--tls-keylog PATH]
             pcap
 ```
 
@@ -301,6 +303,8 @@ analyzer.py [-h] [--top N] [--case NAME]
 | `--jarm-probe` | off | Actively fingerprint observed TLS servers with JARM (requires outbound connectivity) |
 | `--min-ioc-confidence` | LOW | Drop IOCs below this confidence from iocs.csv and the STIX bundle (MEDIUM removes flow-only IPs, user-agents, JA4S; HIGH keeps only corroborated indicators) |
 | `--decode-as` | — | Force a dissector for a non-standard port, e.g. `tcp.port==8888,http` (repeatable). Applies to all TShark extraction, statistics, and JA4 passes |
+| `--intel-dir` | intel/ | Directory of JA3/JA4/JARM threat-intel feed CSVs to merge into the detection tables |
+| `--tls-keylog` | — | Path to a TLS key-log file (SSLKEYLOGFILE format) to decrypt TLS so HTTPS content is extracted like plaintext |
 
 ---
 
@@ -607,7 +611,7 @@ optional package (openpyxl, yara) skip cleanly when it is absent.
 ## Current Limitations
 
 - Full HTTP/2 body reconstruction is not supported
-- Deep HTTPS payload inspection requires TLS decryption material (key log file)
+- Deep HTTPS payload inspection requires TLS decryption material — supply it with `--tls-keylog` (SSLKEYLOGFILE); without it, TLS stays encrypted (metadata only)
 - TCP reassembly covers reconstructable plaintext streams only
 - Some fields (JA3/JA4 family, newer protocol fields) depend on TShark version; unavailable fields are detected via `tshark -G fields` and dropped automatically rather than failing the pass
 - GeoIP enrichment requires a separate database download
@@ -678,10 +682,8 @@ Install Wireshark/TShark and ensure it is in your PATH. The toolkit also auto-de
 
 ## Future Improvements
 
-- TLS key log file (SSLKEYLOGFILE) support for HTTPS decryption
 - Full HTTP/2 body reconstruction
 - Additional Kerberos attack pattern signatures (AS-REP roasting scoring)
 - Deeper multipart body parsing
-- Expanded JA3 / JA4 / JARM threat intel database
 - STIX 2.1 relationship objects (Indicator → Malware / Infrastructure)
 - Bundled GUI distribution (PyInstaller `.app` / `.exe`) for analysts without Python installed

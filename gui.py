@@ -313,6 +313,18 @@ class App(_Root):
         ).pack(side="left", fill="x", expand=True, padx=(5, 5))
         ctk.CTkButton(row, text="Browse", width=90, command=self._browse_intel_dir).pack(side="left")
 
+        # TLS key-log file (optional; decrypts HTTPS when secrets are available)
+        row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(row, text="TLS keylog:", width=110, anchor="w").pack(side="left")
+        self.tls_keylog_var = tk.StringVar()
+        ctk.CTkEntry(
+            row,
+            textvariable=self.tls_keylog_var,
+            placeholder_text="SSLKEYLOGFILE to decrypt TLS (optional)",
+        ).pack(side="left", fill="x", expand=True, padx=(5, 5))
+        ctk.CTkButton(row, text="Browse", width=90, command=self._browse_tls_keylog).pack(side="left")
+
         # Modules section header
         ctk.CTkLabel(
             self.input_frame,
@@ -490,6 +502,14 @@ class App(_Root):
         if path:
             self.intel_dir_var.set(path)
 
+    def _browse_tls_keylog(self):
+        path = filedialog.askopenfilename(
+            title="Select TLS key-log file",
+            filetypes=[("Key log", "*.log *.keylog *.txt"), ("All files", "*.*")],
+        )
+        if path:
+            self.tls_keylog_var.set(path)
+
     # ------------------------------------------------------------------
     # Drag-and-drop
     # ------------------------------------------------------------------
@@ -619,6 +639,8 @@ class App(_Root):
                 cmd += ["--decode-as", rule.strip()]
         if self.intel_dir_var.get().strip():
             cmd += ["--intel-dir", self.intel_dir_var.get().strip()]
+        if self.tls_keylog_var.get().strip():
+            cmd += ["--tls-keylog", self.tls_keylog_var.get().strip()]
         return cmd
 
     @staticmethod

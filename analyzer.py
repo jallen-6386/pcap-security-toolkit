@@ -99,7 +99,7 @@ from modules.auth_protocols import (
 )
 from modules.dcerpc import detect_dcerpc_abuse, summarize_dcerpc_binds
 from modules.http_objects import export_http_objects
-from modules.tshark_config import is_valid_decode_as, set_decode_as
+from modules.tshark_config import is_valid_decode_as, set_decode_as, set_tls_keylog
 from modules.threat_intel import load_intel_feeds
 from modules.stream_triage import score_streams
 from modules.utils import is_noise_ip
@@ -445,6 +445,12 @@ def main():
         help="Directory of JA3/JA4/JARM threat-intel feed CSVs to merge into "
              "the detection tables (default: the project's intel/ directory).",
     )
+    parser.add_argument(
+        "--tls-keylog",
+        metavar="PATH",
+        help="Path to a TLS key-log file (SSLKEYLOGFILE format) to decrypt TLS "
+             "sessions, so HTTPS content is extracted like plaintext.",
+    )
     args = parser.parse_args()
 
     pcap_path = Path(args.pcap)
@@ -467,6 +473,17 @@ def main():
     if decode_as_rules:
         set_decode_as(decode_as_rules)
         print(f"[*] Decode-as rules active: {', '.join(decode_as_rules)}")
+
+    # Activate TLS decryption if a key-log file was supplied.
+    tls_keylog_active = False
+    if args.tls_keylog:
+        keylog_path = Path(args.tls_keylog)
+        if keylog_path.is_file():
+            set_tls_keylog(keylog_path)
+            tls_keylog_active = True
+            print(f"[*] TLS key-log decryption active: {keylog_path}")
+        else:
+            print(f"[!] TLS key-log file not found, skipping decryption: {keylog_path}")
 
     # Merge external threat-intel feeds into the JA3/JA4/JARM detection tables.
     intel_dir = Path(args.intel_dir) if args.intel_dir else (BASE_DIR / "intel")
@@ -997,6 +1014,7 @@ def main():
         "geoip_enabled": enricher.available,
         "decode_as_rules": decode_as_rules,
         "intel_feed_counts": intel_counts,
+        "tls_keylog_active": tls_keylog_active,
     }
 
     # ------------------------------------------------------------------
