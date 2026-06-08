@@ -48,7 +48,7 @@ This project uses:
 - SMB file and path indicators
 - FTP RETR/STOR command extraction
 - SMTP/IMAP/POP3 commands and authentication
-- Kerberos authentication events: principal names, realms, error codes, encryption types
+- Kerberos authentication events: principal names, SPNs, realms, error codes, encryption types, pre-auth data — with Kerberoasting and AS-REP roasting detection
 - NTLMSSP authentication: account/domain/host identity, server challenge (forensic capture + external-auth detection)
 - LDAP bind/search activity: cleartext simple-bind detection and directory-enumeration volume
 - DCERPC interface binds: maps well-known interface UUIDs to lateral-movement techniques (DCSync, PetitPotam, remote task scheduling, service control)
@@ -76,7 +76,9 @@ This project uses:
 | Internal SMB lateral spread | `LATERAL_MOVEMENT_CANDIDATE` | T1021.002 |
 | Internal TCP port scan | `INTERNAL_SCAN_CANDIDATE` | T1046 |
 | HTTP response anomalies (confirmed delivery, scanning) | `HTTP_RESPONSE_ANOMALY` | T1105 |
-| Kerberos errors (AS-REP roasting, Kerberoasting) | `KERBEROS_ANOMALY` | T1558 |
+| Kerberos errors (failed auth, ticket anomalies) | `KERBEROS_ANOMALY` | T1558 |
+| Kerberoasting (TGS-REQ with RC4 service ticket) | `KERBEROASTING_CANDIDATE` | T1558.003 |
+| AS-REP roasting (AS-REP without pre-authentication) | `ASREP_ROASTING_CANDIDATE` | T1558.004 |
 | NTLM authentication to an external host (relay/leak) | `NTLM_EXTERNAL_AUTH` | T1187 |
 | Cleartext LDAP simple bind (password on the wire) | `LDAP_CLEARTEXT_BIND` | T1552 |
 | LDAP search enumeration (BloodHound/SharpHound) | `LDAP_ENUMERATION` | T1087 |
@@ -149,6 +151,7 @@ pcap-security-toolkit/
 │   ├── icmp_tunnel.py
 │   ├── iocs.py
 │   ├── ja4.py
+│   ├── kerberos_attacks.py
 │   ├── jarm.py
 │   ├── os_fingerprint.py
 │   ├── payloads.py
@@ -373,6 +376,7 @@ output/
     ├── ftp_tshark.csv
     ├── smtp_activity.csv
     ├── kerberos_activity.csv
+    ├── kerberos_attacks.csv            ← Kerberoasting / AS-REP roasting candidates
     ├── ntlm_activity.csv               ← NTLM auth events (account/domain/host)
     ├── ldap_activity.csv               ← LDAP bind/search activity
     ├── dcerpc_activity.csv             ← DCERPC interface binds (lateral movement)
@@ -481,6 +485,11 @@ Reverse-DNS lookups (`*.in-addr.arpa`, `*.ip6.arpa`) are excluded as normal oper
 ### lateral_movement_candidates.csv
 - `LATERAL_MOVEMENT_CANDIDATE` — single host connected to 3+ internal targets via SMB (port 445)
 - `INTERNAL_SCAN_CANDIDATE` — small TCP connections to 10+ internal IPs or across 10+ ports
+
+### kerberos_attacks.csv
+Kerberos credential-attack candidates (MEDIUM — leads for review):
+- `KERBEROASTING_CANDIDATE` (T1558.003) — a TGS-REQ requesting a service ticket with RC4 (etype 23), which is crackable offline; the SPN is included
+- `ASREP_ROASTING_CANDIDATE` (T1558.004) — an account that received an AS-REP without ever sending Kerberos pre-authentication (PA-ENC-TIMESTAMP), so its AS-REP is crackable. Normal accounts that retry with pre-auth are not flagged
 
 ### ntlm_activity.csv / ldap_activity.csv / dcerpc_activity.csv
 Forensic records of Windows authentication and RPC traffic:
@@ -683,7 +692,6 @@ Install Wireshark/TShark and ensure it is in your PATH. The toolkit also auto-de
 ## Future Improvements
 
 - Full HTTP/2 body reconstruction
-- Additional Kerberos attack pattern signatures (AS-REP roasting scoring)
 - Deeper multipart body parsing
 - STIX 2.1 relationship objects (Indicator → Malware / Infrastructure)
 - Bundled GUI distribution (PyInstaller `.app` / `.exe`) for analysts without Python installed

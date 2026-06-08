@@ -8,6 +8,7 @@ from modules.auth_protocols import (
     summarize_ntlm_events,
 )
 from modules.dcerpc import detect_dcerpc_abuse, summarize_dcerpc_binds
+from modules.kerberos_attacks import detect_kerberos_attacks
 from modules.detections import build_alerts
 
 
@@ -75,6 +76,43 @@ class TestDCERPC(unittest.TestCase):
         rows = [{"dcerpc.cn_bind_to_uuid": "99999999-0000-0000-0000-000000000000",
                  "ip.src": "10.0.0.9", "ip.dst": "10.0.0.2"}]
         self.assertEqual(summarize_dcerpc_binds(rows), [])
+
+
+class TestKerberosAttacks(unittest.TestCase):
+    def test_kerberoasting_rc4_flagged_aes_not(self):
+        rows = [
+            {"kerberos.msg_type": "12", "kerberos.SNameString": "MSSQLSvc/db",
+             "kerberos.etype": "23", "ip.src": "10.0.0.5", "ip.dst": "10.0.0.1"},
+            {"kerberos.msg_type": "12", "kerberos.SNameString": "cifs/fs",
+             "kerberos.etype": "18,17", "ip.src": "10.0.0.5", "ip.dst": "10.0.0.1"},
+        ]
+        found = detect_kerberos_attacks(rows)
+        roast = [f for f in found if f["alert_type"] == "KERBEROASTING_CANDIDATE"]
+        self.assertEqual(len(roast), 1)
+        self.assertIn("MSSQLSvc/db", roast[0]["reason"])
+
+    def test_asrep_roasting_flagged(self):
+        rows = [
+            {"kerberos.msg_type": "10", "kerberos.CNameString": "svc",
+             "kerberos.padata_type": "", "ip.src": "10.0.0.7", "ip.dst": "10.0.0.1"},
+            {"kerberos.msg_type": "11", "kerberos.CNameString": "svc",
+             "ip.src": "10.0.0.1", "ip.dst": "10.0.0.7"},
+        ]
+        found = detect_kerberos_attacks(rows)
+        self.assertTrue(any(f["alert_type"] == "ASREP_ROASTING_CANDIDATE" for f in found))
+
+    def test_normal_preauth_account_not_flagged(self):
+        # AS-REQ no preauth -> AS-REQ with preauth -> AS-REP  (normal flow)
+        rows = [
+            {"kerberos.msg_type": "10", "kerberos.CNameString": "alice",
+             "kerberos.padata_type": "", "ip.src": "10.0.0.8", "ip.dst": "10.0.0.1"},
+            {"kerberos.msg_type": "10", "kerberos.CNameString": "alice",
+             "kerberos.padata_type": "2", "ip.src": "10.0.0.8", "ip.dst": "10.0.0.1"},
+            {"kerberos.msg_type": "11", "kerberos.CNameString": "alice",
+             "ip.src": "10.0.0.1", "ip.dst": "10.0.0.8"},
+        ]
+        found = detect_kerberos_attacks(rows)
+        self.assertFalse(any(f["alert_type"] == "ASREP_ROASTING_CANDIDATE" for f in found))
 
 
 class TestAuthAlertWiring(unittest.TestCase):

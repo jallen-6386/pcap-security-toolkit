@@ -159,9 +159,11 @@ def extract_kerberos_fields(pcap_path):
         "tcp.stream",
         "kerberos.msg_type",
         "kerberos.CNameString",
+        "kerberos.SNameString",
         "kerberos.realm",
         "kerberos.error_code",
         "kerberos.etype",
+        "kerberos.padata_type",
     ]
     return run_tshark_fields(pcap_path, fields, display_filter="kerberos")
 

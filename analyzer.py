@@ -98,6 +98,7 @@ from modules.auth_protocols import (
     summarize_ntlm_events,
 )
 from modules.dcerpc import detect_dcerpc_abuse, summarize_dcerpc_binds
+from modules.kerberos_attacks import detect_kerberos_attacks
 from modules.http_objects import export_http_objects
 from modules.tshark_config import is_valid_decode_as, set_decode_as, set_tls_keylog
 from modules.threat_intel import load_intel_feeds
@@ -144,6 +145,7 @@ def print_report_summary(report: dict, alerts: list[dict], severity_filter: str)
     print(f"NTLM Auth Events:           {report.get('ntlm_event_count', 0)}")
     print(f"LDAP Activity Rows:         {report.get('ldap_activity_count', 0)}")
     print(f"DCERPC Interface Binds:     {report.get('dcerpc_bind_count', 0)}")
+    print(f"Kerberos Attack Candidates: {report.get('kerberos_attack_count', 0)}")
     print(f"Suspicious Downloads:       {report.get('suspicious_download_count', 0)}")
     print(f"Entropy Exfil Candidates:   {report.get('entropy_exfil_candidate_count', 0)}")
     print(f"Beaconing Candidates:       {report.get('beaconing_candidate_count', 0)}")
@@ -560,6 +562,7 @@ def main():
     dcerpc_rows = []
     dcerpc_binds = []
     dcerpc_findings = []
+    kerberos_attack_findings = []
 
     # ------------------------------------------------------------------
     # TShark-assisted extraction
@@ -822,6 +825,10 @@ def main():
         dcerpc_binds = summarize_dcerpc_binds(dcerpc_rows)
         dcerpc_findings = detect_dcerpc_abuse(dcerpc_binds)
 
+    if kerberos_rows:
+        print("[*] Detecting Kerberos credential attacks")
+        kerberos_attack_findings = detect_kerberos_attacks(kerberos_rows)
+
     if args.yara_rules:
         yara_rules_compiled = load_rules(args.yara_rules)
         if yara_rules_compiled:
@@ -899,6 +906,7 @@ def main():
         ntlm_external_findings=ntlm_external_findings,
         ldap_findings=ldap_findings,
         dcerpc_findings=dcerpc_findings,
+        kerberos_attack_findings=kerberos_attack_findings,
     )
 
     # ------------------------------------------------------------------
@@ -1006,6 +1014,7 @@ def main():
         "ntlm_event_count": len(ntlm_events),
         "ldap_activity_count": len(ldap_activity),
         "dcerpc_bind_count": len(dcerpc_binds),
+        "kerberos_attack_count": len(kerberos_attack_findings),
         "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
         "ioc_count": len(iocs),
@@ -1062,6 +1071,7 @@ def main():
     write_csv(case_output_dir / "ntlm_activity.csv", ntlm_events)
     write_csv(case_output_dir / "ldap_activity.csv", ldap_activity)
     write_csv(case_output_dir / "dcerpc_activity.csv", dcerpc_binds)
+    write_csv(case_output_dir / "kerberos_attacks.csv", kerberos_attack_findings)
     write_csv(case_output_dir / "carved_files.csv", carved_files)
     write_csv(case_output_dir / "iocs.csv", iocs)
 
