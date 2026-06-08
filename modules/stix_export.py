@@ -91,8 +91,26 @@ def export_stix_bundle(
     }
     now = _now_iso()
     identity_id = f"identity--{_IDENTITY_UUID}"
-    malware_objects: dict[str, dict] = {}   # family -> Malware SDO
+    malware_objects: dict[str, dict] = {}          # family -> Malware SDO
+    infrastructure_objects: dict[str, dict] = {}   # value -> Infrastructure SDO
     relationship_objects: list[dict] = []
+
+    # IOC types that represent network infrastructure (potential C2).
+    _INFRA_TYPES = {"ipv4", "domain", "url"}
+
+    def _add_relationship(rel_type: str, source_id: str, target_id: str, ts: str):
+        rel_uuid = uuid.uuid5(_TOOL_NS, f"{rel_type}:{source_id}:{target_id}")
+        relationship_objects.append({
+            "type": "relationship",
+            "spec_version": "2.1",
+            "id": f"relationship--{rel_uuid}",
+            "created": ts,
+            "modified": ts,
+            "created_by_ref": identity_id,
+            "relationship_type": rel_type,
+            "source_ref": source_id,
+            "target_ref": target_id,
+        })
 
     identity_obj = {
         "type": "identity",
@@ -161,7 +179,10 @@ def export_stix_bundle(
         indicator_objects.append(obj)
 
         # If this IOC is tied to a known malware family, add a Malware SDO and
-        # an "indicates" relationship from the indicator to it.
+        # an "indicates" relationship from the indicator to it. Network IOCs
+        # (IP/domain/URL) also get an Infrastructure SDO (command-and-control)
+        # so the bundle models the C2 infra: indicator->indicates->infra and
+        # malware->uses->infra.
         family = malware_associations.get(value.lower())
         if family:
             malware_id = malware_objects.get(family, {}).get("id")
@@ -177,18 +198,26 @@ def export_stix_bundle(
                     "name": family,
                     "is_family": True,
                 }
-            rel_uuid = uuid.uuid5(_TOOL_NS, f"indicates:{indicator_id}:{malware_id}")
-            relationship_objects.append({
-                "type": "relationship",
-                "spec_version": "2.1",
-                "id": f"relationship--{rel_uuid}",
-                "created": first_seen,
-                "modified": first_seen,
-                "created_by_ref": identity_id,
-                "relationship_type": "indicates",
-                "source_ref": indicator_id,
-                "target_ref": malware_id,
-            })
+            _add_relationship("indicates", indicator_id, malware_id, first_seen)
+
+            if ioc_type in _INFRA_TYPES:
+                infra = infrastructure_objects.get(value.lower())
+                if infra is None:
+                    infra_id = f"infrastructure--{uuid.uuid5(_TOOL_NS, f'infrastructure:{value.lower()}')}"
+                    infra = {
+                        "type": "infrastructure",
+                        "spec_version": "2.1",
+                        "id": infra_id,
+                        "created": first_seen,
+                        "modified": first_seen,
+                        "created_by_ref": identity_id,
+                        "name": value[:120],
+                        "infrastructure_types": ["command-and-control"],
+                    }
+                    infrastructure_objects[value.lower()] = infra
+                infra_id = infra["id"]
+                _add_relationship("indicates", indicator_id, infra_id, first_seen)
+                _add_relationship("uses", malware_id, infra_id, first_seen)
 
     bundle = {
         "type": "bundle",
@@ -198,6 +227,7 @@ def export_stix_bundle(
             [identity_obj]
             + indicator_objects
             + list(malware_objects.values())
+            + list(infrastructure_objects.values())
             + relationship_objects
         ),
     }

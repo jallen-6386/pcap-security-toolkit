@@ -89,8 +89,13 @@ class TestStixRelationships(unittest.TestCase):
         rels = [o for o in objs if o["type"] == "relationship"]
         self.assertEqual(len(malware), 1)              # deduped family
         self.assertTrue(malware[0]["is_family"])
-        self.assertEqual(len(rels), 2)
-        self.assertTrue(all(r["relationship_type"] == "indicates" for r in rels))
+        # IP gets an Infrastructure SDO (C2); fingerprint does not.
+        infra = [o for o in objs if o["type"] == "infrastructure"]
+        self.assertEqual(len(infra), 1)
+        self.assertEqual(infra[0]["name"], "45.1.2.3")
+        self.assertIn("command-and-control", infra[0]["infrastructure_types"])
+        rel_types = {r["relationship_type"] for r in rels}
+        self.assertEqual(rel_types, {"indicates", "uses"})
 
     def test_no_associations_no_malware(self):
         import json
