@@ -74,6 +74,33 @@ class TestExcelRowLimit(unittest.TestCase):
         self.assertIn("omitted", str(ws.cell(row=6, column=1).value))
 
 
+class TestStixRelationships(unittest.TestCase):
+    def test_malware_sdo_and_relationships(self):
+        import json
+        from modules.stix_export import export_stix_bundle
+        iocs = [
+            {"ioc_type": "ja3_fingerprint", "value": "abc123", "confidence": "MEDIUM"},
+            {"ioc_type": "ipv4", "value": "45.1.2.3", "confidence": "HIGH"},
+        ]
+        assoc = {"abc123": "Cobalt Strike", "45.1.2.3": "Cobalt Strike"}
+        bundle = json.loads(export_stix_bundle(iocs, malware_associations=assoc))
+        objs = bundle["objects"]
+        malware = [o for o in objs if o["type"] == "malware"]
+        rels = [o for o in objs if o["type"] == "relationship"]
+        self.assertEqual(len(malware), 1)              # deduped family
+        self.assertTrue(malware[0]["is_family"])
+        self.assertEqual(len(rels), 2)
+        self.assertTrue(all(r["relationship_type"] == "indicates" for r in rels))
+
+    def test_no_associations_no_malware(self):
+        import json
+        from modules.stix_export import export_stix_bundle
+        bundle = json.loads(export_stix_bundle(
+            [{"ioc_type": "domain", "value": "x.com", "confidence": "LOW"}]))
+        self.assertFalse(any(o["type"] in ("malware", "relationship")
+                             for o in bundle["objects"]))
+
+
 class TestYaraRuleset(unittest.TestCase):
     def setUp(self):
         try:

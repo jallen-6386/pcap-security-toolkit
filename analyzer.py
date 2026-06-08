@@ -1076,7 +1076,28 @@ def main():
     write_csv(case_output_dir / "iocs.csv", iocs)
 
     print("[*] Exporting STIX 2.1 IOC bundle")
-    stix_bundle = export_stix_bundle(iocs, case_name=args.case or "")
+    # Tie IOCs to malware families (from JA3/JA4/JARM matches) so the bundle can
+    # include Malware SDOs + "indicates" relationships.
+    malware_associations: dict = {}
+    for finding in malicious_ja3_findings:
+        family = finding.get("malware_family")
+        if family:
+            for field in ("ja3", "dst_ip"):
+                if finding.get(field):
+                    malware_associations[finding[field]] = family
+    for finding in malicious_ja4_findings:
+        family = finding.get("malware_family")
+        if family:
+            for field in ("ja4", "dst_ip"):
+                if finding.get(field):
+                    malware_associations[finding[field]] = family
+    for finding in jarm_results:
+        family = finding.get("malware_family")
+        if family and finding.get("dst_ip"):
+            malware_associations[finding["dst_ip"]] = family
+    stix_bundle = export_stix_bundle(
+        iocs, case_name=args.case or "", malware_associations=malware_associations
+    )
     (case_output_dir / "iocs.stix2.json").write_text(stix_bundle, encoding="utf-8")
     write_csv(case_output_dir / "timeline.csv", timeline)
     write_csv(case_output_dir / "alerts.csv", alerts)

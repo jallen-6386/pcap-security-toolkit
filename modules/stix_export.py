@@ -70,15 +70,29 @@ def _safe_ts(ts: str, fallback: str) -> str:
     return fallback
 
 
-def export_stix_bundle(iocs: list[dict], case_name: str = "") -> str:
+def export_stix_bundle(
+    iocs: list[dict],
+    case_name: str = "",
+    malware_associations: dict | None = None,
+) -> str:
     """
     Convert IOC list to a STIX 2.1 JSON bundle string.
 
     Returns a formatted JSON string ready to write to iocs.stix2.json.
     IOC types without a STIX pattern mapping are silently skipped.
+
+    *malware_associations* maps an IOC value (lowercased) to a known malware
+    family name (e.g. a malicious JA3 hash -> "Cobalt Strike"). For each match,
+    a Malware SDO and an "indicates" Relationship are added to the bundle.
     """
+    malware_associations = {
+        (k or "").strip().lower(): v
+        for k, v in (malware_associations or {}).items() if k and v
+    }
     now = _now_iso()
     identity_id = f"identity--{_IDENTITY_UUID}"
+    malware_objects: dict[str, dict] = {}   # family -> Malware SDO
+    relationship_objects: list[dict] = []
 
     identity_obj = {
         "type": "identity",
@@ -146,11 +160,46 @@ def export_stix_bundle(iocs: list[dict], case_name: str = "") -> str:
 
         indicator_objects.append(obj)
 
+        # If this IOC is tied to a known malware family, add a Malware SDO and
+        # an "indicates" relationship from the indicator to it.
+        family = malware_associations.get(value.lower())
+        if family:
+            malware_id = malware_objects.get(family, {}).get("id")
+            if malware_id is None:
+                malware_id = f"malware--{uuid.uuid5(_TOOL_NS, f'malware:{family.lower()}')}"
+                malware_objects[family] = {
+                    "type": "malware",
+                    "spec_version": "2.1",
+                    "id": malware_id,
+                    "created": now,
+                    "modified": now,
+                    "created_by_ref": identity_id,
+                    "name": family,
+                    "is_family": True,
+                }
+            rel_uuid = uuid.uuid5(_TOOL_NS, f"indicates:{indicator_id}:{malware_id}")
+            relationship_objects.append({
+                "type": "relationship",
+                "spec_version": "2.1",
+                "id": f"relationship--{rel_uuid}",
+                "created": first_seen,
+                "modified": first_seen,
+                "created_by_ref": identity_id,
+                "relationship_type": "indicates",
+                "source_ref": indicator_id,
+                "target_ref": malware_id,
+            })
+
     bundle = {
         "type": "bundle",
         "id": f"bundle--{uuid.uuid4()}",
         "spec_version": "2.1",
-        "objects": [identity_obj] + indicator_objects,
+        "objects": (
+            [identity_obj]
+            + indicator_objects
+            + list(malware_objects.values())
+            + relationship_objects
+        ),
     }
 
     return json.dumps(bundle, indent=2, ensure_ascii=False)
