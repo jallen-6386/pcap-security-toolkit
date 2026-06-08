@@ -3,12 +3,25 @@ import binascii
 import csv
 import hashlib
 import math
+import quopri
 import re
 from pathlib import Path
 
 
 FILENAME_RE = re.compile(
     r'filename="([^"]+)"|filename=([^;\r\n]+)',
+    re.IGNORECASE,
+)
+
+# Content-Disposition form-field name; the negative lookbehind avoids matching
+# the "name=" inside "filename=".
+FIELD_NAME_RE = re.compile(
+    r'(?<![A-Za-z])name="([^"]+)"',
+    re.IGNORECASE,
+)
+
+TRANSFER_ENCODING_RE = re.compile(
+    r"Content-Transfer-Encoding:\s*([^\r\n;]+)",
     re.IGNORECASE,
 )
 
@@ -165,6 +178,30 @@ def extract_content_type(content: str) -> str | None:
     return match.group(1).strip()
 
 
+def extract_field_name_from_headers(content: str) -> str | None:
+    match = FIELD_NAME_RE.search(content)
+    return match.group(1) if match else None
+
+
+def extract_transfer_encoding(content: str) -> str | None:
+    match = TRANSFER_ENCODING_RE.search(content)
+    return match.group(1).strip().lower() if match else None
+
+
+def decode_transfer_encoding(body_bytes: bytes, encoding: str) -> bytes:
+    """Decode a MIME part body per its Content-Transfer-Encoding (best effort)."""
+    enc = (encoding or "").strip().lower()
+    try:
+        if enc == "base64":
+            compact = b"".join(body_bytes.split())
+            return base64.b64decode(compact, validate=False)
+        if enc == "quoted-printable":
+            return quopri.decodestring(body_bytes)
+    except (binascii.Error, ValueError):
+        return body_bytes
+    return body_bytes
+
+
 def split_headers_and_body_text(text: str) -> tuple[str, str]:
     if "\r\n\r\n" in text:
         return text.split("\r\n\r\n", 1)
@@ -228,15 +265,24 @@ def extract_multipart_parts_from_ascii(body_text: str, boundary: str) -> list[di
 
         headers_text, part_body_text = split_headers_and_body_text(raw_part)
         filename = extract_filename_from_headers(headers_text)
+        field_name = extract_field_name_from_headers(headers_text)
         content_type = extract_content_type(headers_text) or "application/octet-stream"
         body_bytes = part_body_text.strip("\r\n").encode("utf-8", errors="replace")
+
+        # Decode the part if it carries a Content-Transfer-Encoding (base64 or
+        # quoted-printable), so the real file/field content is recovered.
+        transfer_encoding = extract_transfer_encoding(headers_text)
+        if transfer_encoding:
+            body_bytes = decode_transfer_encoding(body_bytes, transfer_encoding)
 
         if not body_bytes:
             continue
 
         parts_found.append({
             "filename": filename,
+            "field_name": field_name,
             "content_type": content_type,
+            "transfer_encoding": transfer_encoding or "",
             "body_bytes": body_bytes,
             "is_text": looks_mostly_text(body_bytes),
             "source": "multipart_ascii",
@@ -494,6 +540,7 @@ def save_extracted_payloads(
                 "output_file": str(output_path),
                 "filename": output_path.name,
                 "original_filename": candidate["filename"] or "",
+                "form_field_name": candidate.get("field_name") or "",
                 "content_type": candidate["content_type"],
                 "source": candidate["source"],
                 "used_raw_bytes": bool(raw_bytes_full and candidate["source"] == "http_body_ascii"),

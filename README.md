@@ -108,6 +108,7 @@ This project uses:
 - Active JARM TLS server fingerprinting with known C2 hash lookup (`--jarm-probe`)
 - TCP stream export in ASCII and RAW modes
 - HTTP payload extraction from reconstructable plaintext streams
+- Multipart form-data parsing: decodes base64/quoted-printable parts and captures form-field names (e.g. `password`)
 - Base64 payload decoding
 - SHA-256 hashing and Shannon entropy scoring for all extracted content
 - File signature detection for 17 types
@@ -566,7 +567,10 @@ All non-empty CSVs consolidated into a single Excel workbook, one sheet per file
 Index of every payload reconstructed from exported TCP streams:
 - `filename` — constructed safe name (used on disk)
 - `original_filename` — exact filename advertised in the HTTP `Content-Disposition` header, when present
+- `form_field_name` — the multipart form-field name (e.g. `password`, `upload`), when present
 - `content_type`, `sha256`, `entropy`, `detected_file_type`, `detected_extension`, `size_bytes`, `preview`
+
+Multipart parts carrying a `Content-Transfer-Encoding` (base64 or quoted-printable) are decoded so the real file/field content — and its true type and hash — are recovered rather than the encoded text.
 
 ---
 
@@ -692,6 +696,4 @@ Install Wireshark/TShark and ensure it is in your PATH. The toolkit also auto-de
 ## Future Improvements
 
 - Full HTTP/2 body reconstruction
-- Deeper multipart body parsing
-- STIX 2.1 Infrastructure SDOs for C2 servers (Malware SDOs + indicator relationships are done)
 - Bundled GUI distribution (PyInstaller `.app` / `.exe`) for analysts without Python installed
