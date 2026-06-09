@@ -20,7 +20,14 @@ except ImportError:
     print("    python -m pip install -r requirements.txt --no-user")
     sys.exit(1)
 
-from config import BASE_DIR, OUTPUT_DIR, TSHARK_MAX_WORKERS
+from config import (
+    BASE_DIR,
+    HUGE_PCAP_BYTES,
+    HUGE_PCAP_SESSION_RESET,
+    LARGE_PCAP_BYTES,
+    OUTPUT_DIR,
+    TSHARK_MAX_WORKERS,
+)
 from modules.cases import get_case_output_dir
 from modules.dependencies import has_tshark
 from modules.detections import (
@@ -100,7 +107,12 @@ from modules.auth_protocols import (
 from modules.dcerpc import detect_dcerpc_abuse, summarize_dcerpc_binds
 from modules.kerberos_attacks import detect_kerberos_attacks
 from modules.http_objects import export_http_objects
-from modules.tshark_config import is_valid_decode_as, set_decode_as, set_tls_keylog
+from modules.tshark_config import (
+    is_valid_decode_as,
+    set_decode_as,
+    set_session_reset,
+    set_tls_keylog,
+)
 from modules.threat_intel import load_intel_feeds
 from modules.stream_triage import score_streams
 from modules.utils import is_noise_ip
@@ -487,6 +499,27 @@ def main():
         else:
             print(f"[!] TLS key-log file not found, skipping decryption: {keylog_path}")
 
+    # Scale TShark concurrency and per-process memory to the capture size. Many
+    # parallel passes on a multi-gigabyte capture can exhaust RAM, so reduce the
+    # worker count and, for huge files, reset dissector state periodically (-M).
+    try:
+        pcap_size = pcap_path.stat().st_size
+    except OSError:
+        pcap_size = 0
+    effective_workers = TSHARK_MAX_WORKERS
+    if pcap_size >= HUGE_PCAP_BYTES:
+        effective_workers = min(2, TSHARK_MAX_WORKERS)
+        set_session_reset(HUGE_PCAP_SESSION_RESET)
+    elif pcap_size >= LARGE_PCAP_BYTES:
+        effective_workers = min(4, TSHARK_MAX_WORKERS)
+    if effective_workers < TSHARK_MAX_WORKERS:
+        print(
+            f"[*] Large capture (~{pcap_size / 1_000_000:.0f} MB) — using "
+            f"{effective_workers} parallel TShark workers"
+            + (" with periodic session reset (-M)" if pcap_size >= HUGE_PCAP_BYTES else "")
+            + " to limit memory use"
+        )
+
     # Merge external threat-intel feeds into the JA3/JA4/JARM detection tables.
     intel_dir = Path(args.intel_dir) if args.intel_dir else (BASE_DIR / "intel")
     intel_counts = load_intel_feeds(intel_dir)
@@ -576,7 +609,7 @@ def main():
         # `tshark -G fields`.
         get_available_fields()
 
-        print(f"[*] Running TShark extraction ({TSHARK_MAX_WORKERS} parallel workers)")
+        print(f"[*] Running TShark extraction ({effective_workers} parallel workers)")
         extractors = {
             "http":         extract_http_fields,
             "http_resp":    extract_http_response_fields,
@@ -596,7 +629,7 @@ def main():
             "tls":          extract_tls_metadata,
         }
         extraction_results: dict = {}
-        with ThreadPoolExecutor(max_workers=TSHARK_MAX_WORKERS) as executor:
+        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
             future_to_name = {
                 executor.submit(fn, pcap_path): name for name, fn in extractors.items()
             }
@@ -683,7 +716,7 @@ def main():
             export_stream_ids = stream_ids[: args.max_streams]
             print(
                 f"[*] Exporting up to {len(export_stream_ids)} TCP streams "
-                f"(ascii + raw, {TSHARK_MAX_WORKERS} parallel workers)"
+                f"(ascii + raw, {effective_workers} parallel workers)"
             )
 
             # Each follow is its own full-file pass; run them concurrently and
@@ -692,7 +725,7 @@ def main():
                 (sid, mode) for sid in export_stream_ids for mode in ("ascii", "raw")
             ]
             follow_results: dict = {}
-            with ThreadPoolExecutor(max_workers=TSHARK_MAX_WORKERS) as executor:
+            with ThreadPoolExecutor(max_workers=effective_workers) as executor:
                 future_to_task = {
                     executor.submit(export_follow_stream, pcap_path, sid, mode): (sid, mode)
                     for sid, mode in follow_tasks

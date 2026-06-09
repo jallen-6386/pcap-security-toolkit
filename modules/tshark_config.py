@@ -16,6 +16,7 @@ import re
 
 _DECODE_AS_RULES: list[str] = []
 _TLS_KEYLOG_FILE: str = ""
+_SESSION_RESET: int = 0
 
 # A decode-as rule looks like: tcp.port==8888,http  (selector==value,protocol)
 _RULE_RE = re.compile(r"^[^=,\s]+==[^,\s]+,[^,\s]+$")
@@ -43,13 +44,32 @@ def get_tls_keylog() -> str:
     return _TLS_KEYLOG_FILE
 
 
+def set_session_reset(packet_count) -> None:
+    """Set TShark's -M auto session reset interval (0 disables it)."""
+    global _SESSION_RESET
+    try:
+        _SESSION_RESET = max(0, int(packet_count or 0))
+    except (TypeError, ValueError):
+        _SESSION_RESET = 0
+
+
+def get_session_reset() -> int:
+    return _SESSION_RESET
+
+
 def runtime_args() -> list[str]:
-    """Return the TShark args for all active runtime options (decode-as + keylog)."""
+    """Return the TShark args for all active runtime options.
+
+    Covers decode-as rules, a TLS key-log file, and (for very large captures)
+    a -M session-reset interval that bounds per-process memory growth.
+    """
     args: list[str] = []
     for rule in _DECODE_AS_RULES:
         args.extend(["-d", rule])
     if _TLS_KEYLOG_FILE:
         args.extend(["-o", f"tls.keylog_file:{_TLS_KEYLOG_FILE}"])
+    if _SESSION_RESET:
+        args.extend(["-M", str(_SESSION_RESET)])
     return args
 
 

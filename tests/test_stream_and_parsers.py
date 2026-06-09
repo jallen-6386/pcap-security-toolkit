@@ -108,6 +108,7 @@ class TestTsharkRuntimeArgs(unittest.TestCase):
     def tearDown(self):
         tshark_config.set_decode_as([])
         tshark_config.set_tls_keylog("")
+        tshark_config.set_session_reset(0)
 
     def test_decode_as_and_keylog_combined(self):
         tshark_config.set_decode_as(["tcp.port==8888,http"])
@@ -116,6 +117,14 @@ class TestTsharkRuntimeArgs(unittest.TestCase):
         self.assertIn("-d", args)
         self.assertIn("tcp.port==8888,http", args)
         self.assertIn("tls.keylog_file:/tmp/keys.log", args)
+
+    def test_session_reset(self):
+        tshark_config.set_session_reset(100000)
+        args = tshark_config.runtime_args()
+        self.assertIn("-M", args)
+        self.assertIn("100000", args)
+        tshark_config.set_session_reset(0)
+        self.assertNotIn("-M", tshark_config.runtime_args())
 
     def test_empty_by_default(self):
         self.assertEqual(tshark_config.runtime_args(), [])

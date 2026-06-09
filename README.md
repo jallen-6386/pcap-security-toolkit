@@ -594,6 +594,7 @@ The toolkit is built to handle large captures (300,000+ packets) without loading
 - **Single-pass packet analysis** — flow statistics and DNS/HTTP summaries are computed in one combined iteration rather than two separate passes over the capture.
 - **Parallel TShark extraction** — the independent per-protocol extraction passes (HTTP, DNS, TLS, SMB, FTP, SMTP, Kerberos, ICMP, ARP, TCP SYN, stream index) run concurrently instead of serially. The worker count defaults to the number of CPU cores (capped at 8) and is configurable via `TSHARK_MAX_WORKERS` in `config.py`.
 - **Parallel stream export** — when `--export-streams` is set, the per-stream follow passes are also run concurrently.
+- **Adaptive scaling for large captures** — running many TShark passes in parallel on a multi-gigabyte capture can exhaust RAM, so the worker count is reduced automatically by file size (≥250 MB → 4 workers, ≥1 GB → 2 workers), and huge captures also reset TShark's dissector state periodically (`-M`) to bound per-process memory. Thresholds live in `config.py`.
 - **Name resolution disabled** — all TShark calls use `-n`, avoiding DNS/host lookups that would otherwise add latency and non-determinism on large captures.
 
 **Tuning tips for very large captures:**
