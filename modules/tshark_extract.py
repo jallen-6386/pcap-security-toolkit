@@ -1,7 +1,7 @@
 import csv
-import io
 import subprocess
 import sys
+import tempfile
 
 from modules.dependencies import find_tshark
 from modules.tshark_capabilities import filter_available_fields
@@ -18,10 +18,18 @@ def set_csv_field_limit():
             max_size = max_size // 10
 
 
-def run_tshark_fields(pcap_path, fields, display_filter=None):
+def for_each_tshark_field_row(pcap_path, fields, display_filter, handler):
+    """
+    Stream a TShark field extraction, calling handler(row_dict) for each row.
+
+    Output is parsed incrementally so the (potentially multi-gigabyte) result
+    of a per-packet pass is never buffered whole in memory. stderr is captured
+    to a temp file to avoid a pipe-buffer deadlock on chatty warnings. Returns
+    an error string, or None on success.
+    """
     tshark_path = find_tshark()
     if not tshark_path:
-        return [], "TShark not found"
+        return "TShark not found"
 
     # Drop fields this TShark version doesn't know about so a single
     # unsupported field can't fail the whole pass. -n disables name
@@ -29,22 +37,39 @@ def run_tshark_fields(pcap_path, fields, display_filter=None):
     usable_fields, _dropped = filter_available_fields(fields)
 
     cmd = [tshark_path, "-n", *decode_as_args(), "-r", str(pcap_path), "-T", "fields"]
-
     if display_filter:
         cmd.extend(["-Y", display_filter])
-
     for field in usable_fields:
         cmd.extend(["-e", field])
-
     cmd.extend(["-E", "header=y", "-E", "separator=,", "-E", "quote=d"])
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        return [], result.stderr.strip()
-
     set_csv_field_limit()
-    reader = csv.DictReader(io.StringIO(result.stdout))
-    return list(reader), None
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errfile:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=errfile, text=True, bufsize=1
+        )
+        reader = csv.reader(proc.stdout)
+        header = next(reader, None)
+        if header is not None:
+            for row in reader:
+                handler(dict(zip(header, row)))
+        proc.stdout.close()
+        returncode = proc.wait()
+        errfile.seek(0)
+        err = errfile.read().strip()
+
+    if returncode != 0:
+        return err or f"tshark exited with status {returncode}"
+    return None
+
+
+def run_tshark_fields(pcap_path, fields, display_filter=None):
+    """Return (rows, err) for a TShark field extraction (streamed internally)."""
+    rows = []
+    err = for_each_tshark_field_row(pcap_path, fields, display_filter, rows.append)
+    if err is not None:
+        return [], err
+    return rows, None
 
 
 def extract_http_fields(pcap_path):
@@ -262,20 +287,3 @@ def extract_dcerpc_fields(pcap_path):
     return run_tshark_fields(pcap_path, fields, display_filter="dcerpc")
 
 
-def extract_tcp_stream_stats(pcap_path):
-    """Extract per-packet TCP fields used to score and triage streams."""
-    fields = [
-        "tcp.stream",
-        "frame.time_epoch",
-        "frame.len",
-        "ip.src",
-        "tcp.srcport",
-        "ip.dst",
-        "tcp.dstport",
-        "tcp.flags.reset",
-        "tcp.analysis.retransmission",
-        "tcp.analysis.zero_window",
-        "tcp.analysis.lost_segment",
-        "tcp.completeness.str",
-    ]
-    return run_tshark_fields(pcap_path, fields, display_filter="tcp")

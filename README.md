@@ -381,7 +381,7 @@ output/
     ├── ntlm_activity.csv               ← NTLM auth events (account/domain/host)
     ├── ldap_activity.csv               ← LDAP bind/search activity
     ├── dcerpc_activity.csv             ← DCERPC interface binds (lateral movement)
-    ├── tcp_stream_index.csv
+    ├── tcp_stream_index.csv            ← one row per TCP stream (first packet)
     ├── stream_triage.csv               ← TCP streams ranked by suspicion score
     ├── file_indicators.csv
     ├── beaconing_candidates.csv
@@ -595,6 +595,7 @@ The toolkit is built to handle large captures (300,000+ packets) without loading
 - **Parallel TShark extraction** — the independent per-protocol extraction passes (HTTP, DNS, TLS, SMB, FTP, SMTP, Kerberos, ICMP, ARP, TCP SYN, stream index) run concurrently instead of serially. The worker count defaults to the number of CPU cores (capped at 8) and is configurable via `TSHARK_MAX_WORKERS` in `config.py`.
 - **Parallel stream export** — when `--export-streams` is set, the per-stream follow passes are also run concurrently.
 - **Adaptive scaling for large captures** — running many TShark passes in parallel on a multi-gigabyte capture can exhaust RAM, so the worker count is reduced automatically by file size (≥250 MB → 4 workers, ≥1 GB → 2 workers), and huge captures also reset TShark's dissector state periodically (`-M`) to bound per-process memory. Thresholds live in `config.py`.
+- **Streaming extraction (bounded memory)** — TShark output is parsed incrementally rather than buffered whole, and the two per-packet passes are reduced as they stream: the TCP stream index keeps only the first packet per stream, and the stream-triage stats are folded into per-stream aggregates on the fly. Memory for these scales with the number of streams, not the packet count, so multi-million-packet captures don't materialize a row per packet.
 - **Name resolution disabled** — all TShark calls use `-n`, avoiding DNS/host lookups that would otherwise add latency and non-determinism on large captures.
 
 **Tuning tips for very large captures:**

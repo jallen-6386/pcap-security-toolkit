@@ -14,7 +14,24 @@ This produces a navigational ranking, not new alerts: the underlying signals
 
 import math
 
+from modules.tshark_extract import for_each_tshark_field_row
 from modules.utils import is_noise_ip
+
+# Per-packet TCP fields used to score and triage streams.
+STREAM_STATS_FIELDS = [
+    "tcp.stream",
+    "frame.time_epoch",
+    "frame.len",
+    "ip.src",
+    "tcp.srcport",
+    "ip.dst",
+    "tcp.dstport",
+    "tcp.flags.reset",
+    "tcp.analysis.retransmission",
+    "tcp.analysis.zero_window",
+    "tcp.analysis.lost_segment",
+    "tcp.completeness.str",
+]
 
 
 def _is_true(value) -> bool:
@@ -26,85 +43,111 @@ def _is_set(value) -> bool:
     return str(value).strip() not in {"", "0", "false"}
 
 
+def _fold_stat_row(streams: dict, row: dict) -> None:
+    """Fold a single per-packet stats row into the per-stream aggregate dict."""
+    sid = (row.get("tcp.stream", "") or "").strip()
+    if sid == "":
+        return
+
+    agg = streams.get(sid)
+    if agg is None:
+        agg = {
+            "tcp_stream": sid,
+            "src_ip": row.get("ip.src", ""),       # first packet = client
+            "src_port": row.get("tcp.srcport", ""),
+            "dst_ip": row.get("ip.dst", ""),
+            "dst_port": row.get("tcp.dstport", ""),
+            "packet_count": 0,
+            "total_bytes": 0,
+            "client_bytes": 0,
+            "server_bytes": 0,
+            "resets": 0,
+            "retransmissions": 0,
+            "zero_windows": 0,
+            "lost_segments": 0,
+            "completeness": "",
+            "_min_ts": None,
+            "_max_ts": None,
+            "_client_ip": row.get("ip.src", ""),
+        }
+        streams[sid] = agg
+
+    try:
+        length = int(row.get("frame.len", 0) or 0)
+    except ValueError:
+        length = 0
+
+    agg["packet_count"] += 1
+    agg["total_bytes"] += length
+    if row.get("ip.src", "") == agg["_client_ip"]:
+        agg["client_bytes"] += length
+    else:
+        agg["server_bytes"] += length
+
+    if _is_true(row.get("tcp.flags.reset", "")):
+        agg["resets"] += 1
+    if _is_set(row.get("tcp.analysis.retransmission", "")):
+        agg["retransmissions"] += 1
+    if _is_set(row.get("tcp.analysis.zero_window", "")):
+        agg["zero_windows"] += 1
+    if _is_set(row.get("tcp.analysis.lost_segment", "")):
+        agg["lost_segments"] += 1
+
+    completeness = (row.get("tcp.completeness.str", "") or "").strip()
+    if completeness:
+        agg["completeness"] = completeness
+
+    try:
+        ts = float(row.get("frame.time_epoch", "") or 0)
+        if ts:
+            agg["_min_ts"] = ts if agg["_min_ts"] is None else min(agg["_min_ts"], ts)
+            agg["_max_ts"] = ts if agg["_max_ts"] is None else max(agg["_max_ts"], ts)
+    except ValueError:
+        pass
+
+
 def _aggregate_streams(stat_rows: list[dict]) -> dict:
     """Fold per-packet rows into per-stream aggregates keyed by stream id."""
     streams: dict[str, dict] = {}
     for row in stat_rows:
-        sid = (row.get("tcp.stream", "") or "").strip()
-        if sid == "":
-            continue
-
-        agg = streams.get(sid)
-        if agg is None:
-            agg = {
-                "tcp_stream": sid,
-                "src_ip": row.get("ip.src", ""),       # first packet = client
-                "src_port": row.get("tcp.srcport", ""),
-                "dst_ip": row.get("ip.dst", ""),
-                "dst_port": row.get("tcp.dstport", ""),
-                "packet_count": 0,
-                "total_bytes": 0,
-                "client_bytes": 0,
-                "server_bytes": 0,
-                "resets": 0,
-                "retransmissions": 0,
-                "zero_windows": 0,
-                "lost_segments": 0,
-                "completeness": "",
-                "_min_ts": None,
-                "_max_ts": None,
-                "_client_ip": row.get("ip.src", ""),
-            }
-            streams[sid] = agg
-
-        try:
-            length = int(row.get("frame.len", 0) or 0)
-        except ValueError:
-            length = 0
-
-        agg["packet_count"] += 1
-        agg["total_bytes"] += length
-        if row.get("ip.src", "") == agg["_client_ip"]:
-            agg["client_bytes"] += length
-        else:
-            agg["server_bytes"] += length
-
-        if _is_true(row.get("tcp.flags.reset", "")):
-            agg["resets"] += 1
-        if _is_set(row.get("tcp.analysis.retransmission", "")):
-            agg["retransmissions"] += 1
-        if _is_set(row.get("tcp.analysis.zero_window", "")):
-            agg["zero_windows"] += 1
-        if _is_set(row.get("tcp.analysis.lost_segment", "")):
-            agg["lost_segments"] += 1
-
-        completeness = (row.get("tcp.completeness.str", "") or "").strip()
-        if completeness:
-            agg["completeness"] = completeness
-
-        try:
-            ts = float(row.get("frame.time_epoch", "") or 0)
-            if ts:
-                agg["_min_ts"] = ts if agg["_min_ts"] is None else min(agg["_min_ts"], ts)
-                agg["_max_ts"] = ts if agg["_max_ts"] is None else max(agg["_max_ts"], ts)
-        except ValueError:
-            pass
-
+        _fold_stat_row(streams, row)
     return streams
 
 
+def aggregate_tcp_stream_stats(pcap_path):
+    """
+    Stream the TCP stats pass and fold it into per-stream aggregates on the fly.
+
+    Returns (aggregates_dict, err). Memory is bounded by the number of streams
+    rather than the packet count, so multi-million-packet captures don't
+    materialize a row per packet.
+    """
+    streams: dict[str, dict] = {}
+    err = for_each_tshark_field_row(
+        pcap_path, STREAM_STATS_FIELDS, "tcp",
+        lambda row: _fold_stat_row(streams, row),
+    )
+    return streams, err
+
+
 def score_streams(
-    stat_rows: list[dict],
+    stat_data,
     extracted_payloads: list[dict] | None = None,
     carved_files: list[dict] | None = None,
     credential_findings: list[dict] | None = None,
 ) -> list[dict]:
-    """Return per-stream triage rows sorted by descending suspicion score."""
+    """
+    Return per-stream triage rows sorted by descending suspicion score.
+
+    *stat_data* may be either a list of per-packet rows (folded here) or an
+    already-aggregated {stream_id: aggregate} dict (from
+    aggregate_tcp_stream_stats), so the caller can avoid materializing rows.
+    """
     extracted_payloads = extracted_payloads or []
     carved_files = carved_files or []
     credential_findings = credential_findings or []
 
-    streams = _aggregate_streams(stat_rows)
+    streams = stat_data if isinstance(stat_data, dict) else _aggregate_streams(stat_data)
     if not streams:
         return []
 

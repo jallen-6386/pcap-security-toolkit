@@ -1,10 +1,17 @@
 import subprocess
 
 from modules.dependencies import find_tshark
-from modules.tshark_extract import run_tshark_fields
+from modules.tshark_extract import for_each_tshark_field_row
 
 
 def extract_tcp_stream_index(pcap_path):
+    """
+    Return (rows, err) with one row per TCP stream — the first packet seen for
+    each stream. That is all downstream consumers need (unique stream IDs and a
+    stream->endpoint lookup), so the index is built by streaming and keeping
+    only the first row per stream. Memory is bounded by the number of streams
+    rather than the packet count, which matters on multi-million-packet captures.
+    """
     fields = [
         "frame.number",
         "frame.time",
@@ -14,7 +21,17 @@ def extract_tcp_stream_index(pcap_path):
         "tcp.dstport",
         "tcp.stream",
     ]
-    return run_tshark_fields(pcap_path, fields, display_filter="tcp")
+    first_by_stream: dict[str, dict] = {}
+
+    def handler(row):
+        stream_id = (row.get("tcp.stream") or "").strip()
+        if stream_id and stream_id not in first_by_stream:
+            first_by_stream[stream_id] = row
+
+    err = for_each_tshark_field_row(pcap_path, fields, "tcp", handler)
+    if err is not None:
+        return [], err
+    return list(first_by_stream.values()), None
 
 
 def export_follow_stream(pcap_path, stream_id, mode="ascii"):

@@ -95,7 +95,6 @@ from modules.tshark_extract import (
     extract_ntlmssp_fields,
     extract_smtp_fields,
     extract_smb_fields,
-    extract_tcp_stream_stats,
     extract_tcp_syn_fields,
 )
 from modules.auth_protocols import (
@@ -114,7 +113,7 @@ from modules.tshark_config import (
     set_tls_keylog,
 )
 from modules.threat_intel import load_intel_feeds
-from modules.stream_triage import score_streams
+from modules.stream_triage import aggregate_tcp_stream_stats, score_streams
 from modules.utils import is_noise_ip
 
 
@@ -584,7 +583,7 @@ def main():
     protocol_hierarchy_rows = []
     expert_info_rows = []
     credential_tap_rows = []
-    stream_stats_rows = []
+    stream_stats = {}
     stream_triage_rows = []
     ntlm_rows = []
     ldap_rows = []
@@ -622,7 +621,7 @@ def main():
             "arp":          extract_arp_fields,
             "syn":          extract_tcp_syn_fields,
             "stream_index": extract_tcp_stream_index,
-            "stream_stats": extract_tcp_stream_stats,
+            "stream_stats": aggregate_tcp_stream_stats,
             "ntlmssp":      extract_ntlmssp_fields,
             "ldap":         extract_ldap_fields,
             "dcerpc":       extract_dcerpc_fields,
@@ -654,7 +653,7 @@ def main():
         arp_rows, arp_err = extraction_results["arp"]
         syn_rows, syn_err = extraction_results["syn"]
         tcp_stream_rows, stream_err = extraction_results["stream_index"]
-        stream_stats_rows, stream_stats_err = extraction_results["stream_stats"]
+        stream_stats, stream_stats_err = extraction_results["stream_stats"]
         ntlm_rows, ntlm_err = extraction_results["ntlmssp"]
         ldap_rows, ldap_err = extraction_results["ldap"]
         dcerpc_rows, dcerpc_err = extraction_results["dcerpc"]
@@ -880,10 +879,10 @@ def main():
         print("[*] Running JARM fingerprinting (active probing)")
         jarm_results = probe_observed_servers(tls_summary)
 
-    if stream_stats_rows:
+    if stream_stats:
         print("[*] Scoring TCP streams for triage")
         stream_triage_rows = score_streams(
-            stream_stats_rows,
+            stream_stats,
             extracted_payloads=extracted_payloads,
             carved_files=carved_files,
             credential_findings=credential_findings,
