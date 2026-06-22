@@ -6,7 +6,28 @@ from modules.payloads import (
     decode_transfer_encoding,
     extract_field_name_from_headers,
     extract_multipart_parts_from_ascii,
+    parse_raw_follow_stream_bytes,
 )
+
+
+class TestRawFollowParsing(unittest.TestCase):
+    def test_framing_lines_skipped(self):
+        # "GET " = 47 45 54 20 ; framing lines (Node/Filter/ports) must NOT
+        # contribute stray hex bytes to the front of the stream.
+        raw = (
+            "\n"
+            "===================================================================\n"
+            "Follow: tcp,raw\n"
+            "Filter: tcp.stream eq 0\n"
+            "Node 0: 10.0.0.5:40000\n"
+            "Node 1: 1.2.3.4:80\n"
+            "47455420\n"                 # "GET " payload (pure hex line)
+            "\t485454502f312e31\n"        # server side, tab-indented "HTTP/1.1"
+            "===================================================================\n"
+        )
+        data = parse_raw_follow_stream_bytes(raw)
+        self.assertTrue(data.startswith(b"GET "), data[:8])
+        self.assertIn(b"HTTP/1.1", data)
 
 
 class TestMultipartParsing(unittest.TestCase):

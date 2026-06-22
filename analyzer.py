@@ -67,6 +67,7 @@ from modules.stix_export import export_stix_bundle
 from modules.yara_scanner import load_rules, scan_files, yara_available
 from modules.payloads import (
     carve_files_from_raw_streams,
+    parse_raw_follow_stream_bytes,
     save_extracted_payloads,
     write_extracted_payload_index,
 )
@@ -715,43 +716,37 @@ def main():
             export_stream_ids = stream_ids[: args.max_streams]
             print(
                 f"[*] Exporting up to {len(export_stream_ids)} TCP streams "
-                f"(ascii + raw, {effective_workers} parallel workers)"
+                f"(raw, {effective_workers} parallel workers)"
             )
 
-            # Each follow is its own full-file pass; run them concurrently and
-            # write the results out afterward in deterministic order.
-            follow_tasks = [
-                (sid, mode) for sid in export_stream_ids for mode in ("ascii", "raw")
-            ]
-            follow_results: dict = {}
+            # Only the raw follow is fetched per stream (its own full-file pass);
+            # the ascii view is derived from the reconstructed raw bytes. This
+            # halves the per-stream TShark passes and yields cleaner content than
+            # the ascii follow, whose framing markers otherwise leak into payloads.
+            raw_results: dict = {}
             with ThreadPoolExecutor(max_workers=effective_workers) as executor:
-                future_to_task = {
-                    executor.submit(export_follow_stream, pcap_path, sid, mode): (sid, mode)
-                    for sid, mode in follow_tasks
+                future_to_sid = {
+                    executor.submit(export_follow_stream, pcap_path, sid, "raw"): sid
+                    for sid in export_stream_ids
                 }
-                for future in as_completed(future_to_task):
-                    follow_results[future_to_task[future]] = future.result()
+                for future in as_completed(future_to_sid):
+                    raw_results[future_to_sid[future]] = future.result()
 
             for stream_id in export_stream_ids:
-                ascii_content, ascii_err = follow_results.get(
-                    (stream_id, "ascii"), (None, "no result")
-                )
-                if ascii_content is not None:
-                    (streams_dir / f"tcp_stream_{stream_id}.ascii.txt").write_text(
-                        ascii_content, encoding="utf-8", errors="replace"
-                    )
-                else:
-                    print(f"[!] Failed to export tcp.stream {stream_id} ascii: {ascii_err}")
-
-                raw_content, raw_err = follow_results.get(
-                    (stream_id, "raw"), (None, "no result")
-                )
-                if raw_content is not None:
-                    (streams_dir / f"tcp_stream_{stream_id}.raw.txt").write_text(
-                        raw_content, encoding="utf-8", errors="replace"
-                    )
-                else:
+                raw_content, raw_err = raw_results.get(stream_id, (None, "no result"))
+                if raw_content is None:
                     print(f"[!] Failed to export tcp.stream {stream_id} raw: {raw_err}")
+                    continue
+
+                (streams_dir / f"tcp_stream_{stream_id}.raw.txt").write_text(
+                    raw_content, encoding="utf-8", errors="replace"
+                )
+                ascii_text = parse_raw_follow_stream_bytes(raw_content).decode(
+                    "utf-8", errors="replace"
+                )
+                (streams_dir / f"tcp_stream_{stream_id}.ascii.txt").write_text(
+                    ascii_text, encoding="utf-8", errors="replace"
+                )
 
             print("[*] Detecting and extracting payloads using ascii + raw streams")
             extracted_payloads = save_extracted_payloads(

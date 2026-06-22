@@ -45,6 +45,9 @@ BOUNDARY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A line that is purely hex digits — i.e. a follow,tcp,raw payload line.
+_HEX_LINE_RE = re.compile(r"[0-9A-Fa-f]+")
+
 
 def sanitize_filename(name: str) -> str:
     name = name.strip().strip('"').strip("'")
@@ -321,10 +324,22 @@ def extract_http_payload_candidates_from_ascii(stream_text: str) -> list[dict]:
 
 
 def parse_raw_follow_stream_bytes(raw_text: str) -> bytes:
-    hex_chars = re.findall(r"[0-9A-Fa-f]{2}", raw_text)
-    if not hex_chars:
+    # A `follow,tcp,raw` payload line is pure hex (the server direction is
+    # tab-indented). Parse only those lines — the framing lines
+    # ("Node 0: 10.0.0.5:40000", "Filter: ...", "===") also contain hex pairs
+    # (ports/IPs), and including them prepends garbage bytes to the stream.
+    hex_parts = []
+    for line in raw_text.splitlines():
+        token = line.strip()
+        if token and _HEX_LINE_RE.fullmatch(token):
+            hex_parts.append(token)
+    joined = "".join(hex_parts)
+    if len(joined) % 2:          # guard against an odd-length concatenation
+        joined = joined[:-1]
+    try:
+        return bytes.fromhex(joined)
+    except ValueError:
         return b""
-    return bytes.fromhex("".join(hex_chars))
 
 
 def extract_body_from_raw_bytes(raw_bytes: bytes) -> bytes:
