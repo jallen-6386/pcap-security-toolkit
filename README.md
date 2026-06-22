@@ -263,7 +263,7 @@ gui.bat
 ```
 
 **Features:**
-- Drag-and-drop PCAP files or click Browse
+- Drag-and-drop PCAP files or click Browse — select multiple to merge them into one case
 - Toggle switches for `--export-streams`, `--jarm-probe`, `--yara-rules`, `--geoip-db`
 - Output format selector (CSV + Excel / HTML / Both)
 - Severity-filter and minimum-IOC-confidence dropdowns, plus decode-as, threat-intel directory, and TLS key-log fields
@@ -295,7 +295,7 @@ analyzer.py [-h] [--top N] [--case NAME]
 
 | Flag | Default | Description |
 |---|---|---|
-| `pcap` | — | Path to .pcap or .pcapng file |
+| `pcap` | — | Path(s) to .pcap/.pcapng file(s); multiple are merged into one case |
 | `--case` | auto | Case folder name under output/ |
 | `--top` | 10 | Top-N rows in summary tables |
 | `--export-streams` | off | Export TCP streams to files and extract payloads |
@@ -326,6 +326,9 @@ analyzer.py [-h] [--top N] [--case NAME]
 
 # With GeoIP enrichment
 ./run.sh "/path/to/capture.pcapng" --geoip-db ./GeoLite2-ASN.mmdb --output-format both
+
+# Multiple captures into one case (consolidated workbook + per-source detail)
+./run.sh "/path/to/event1.pcap" "/path/to/event2.pcap" --case incident_42
 
 # Full malware-hunting profile: stream export, YARA, and JARM probing
 ./run.sh "/path/to/capture.pcapng" --case incident_42 --export-streams \
@@ -402,6 +405,30 @@ output/
         ├── tcp_stream_0.ascii.txt
         └── tcp_stream_0.raw.txt
 ```
+
+### Multiple PCAPs in one case
+
+Pass several captures to analyze them into a single case (useful when one
+incident spans multiple captures). Each PCAP is analyzed into its own
+`source_N_<name>/` subfolder (full per-source detail — streams, payloads,
+carved files, per-source workbook), and a **consolidated** set of CSVs plus one
+**combined workbook** are written at the case root:
+
+```text
+output/incident_42/
+├── analysis_workbook.xlsx       ← consolidated workbook (all sources)
+├── alerts.csv                   ← combined, severity-sorted
+├── iocs.csv                     ← combined, de-duplicated
+├── timeline.csv                 ← combined, chronological
+├── report.json                  ← summed counts across sources
+├── source_1_event1/            ← full detail for capture 1
+└── source_2_event2/            ← full detail for capture 2
+```
+
+Every combined row gains a `source_pcap` column so you can tell which capture
+each finding came from. IOCs seen in more than one capture are merged (their
+`source_pcap` lists each). In the GUI, select multiple files in the Browse
+dialog (or drag several in).
 
 ---
 

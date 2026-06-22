@@ -226,12 +226,17 @@ class App(_Root):
         self.input_frame = ctk.CTkFrame(self)
         self.input_frame.pack(fill="x", padx=20, pady=(8, 8))
 
-        # PCAP file
+        # PCAP file(s) — multiple captures are merged into one case
         row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
         row.pack(fill="x", padx=15, pady=(15, 5))
-        ctk.CTkLabel(row, text="PCAP file:", width=110, anchor="w").pack(side="left")
+        ctk.CTkLabel(row, text="PCAP file(s):", width=110, anchor="w").pack(side="left")
         self.pcap_var = tk.StringVar()
-        placeholder = "Drop file here or click Browse" if self.dnd_available else "Click Browse to select a .pcap or .pcapng"
+        self.selected_pcaps: list[str] = []
+        self._pcap_summary = ""
+        placeholder = (
+            "Drop file(s) here or click Browse"
+            if self.dnd_available else "Click Browse to select one or more .pcap/.pcapng"
+        )
         self.pcap_entry = ctk.CTkEntry(row, textvariable=self.pcap_var, placeholder_text=placeholder)
         self.pcap_entry.pack(side="left", fill="x", expand=True, padx=(5, 5))
         ctk.CTkButton(row, text="Browse", width=90, command=self._browse_pcap).pack(side="left")
@@ -466,15 +471,36 @@ class App(_Root):
     # ------------------------------------------------------------------
 
     def _browse_pcap(self):
-        path = filedialog.askopenfilename(
-            title="Select a PCAP file",
+        paths = filedialog.askopenfilenames(
+            title="Select one or more PCAP files",
             filetypes=[
                 ("PCAP files", "*.pcap *.pcapng *.cap"),
                 ("All files", "*.*"),
             ],
         )
-        if path:
-            self.pcap_var.set(path)
+        if paths:
+            self._set_pcaps(list(paths))
+
+    def _set_pcaps(self, paths: list[str]):
+        """Record the selected PCAP(s) and show them (or a count) in the field."""
+        self.selected_pcaps = [p for p in paths if p.strip()]
+        if len(self.selected_pcaps) == 1:
+            self._pcap_summary = self.selected_pcaps[0]
+        elif self.selected_pcaps:
+            names = ", ".join(Path(p).name for p in self.selected_pcaps)
+            self._pcap_summary = f"{len(self.selected_pcaps)} files: {names}"
+        else:
+            self._pcap_summary = ""
+        self.pcap_var.set(self._pcap_summary)
+
+    def _get_pcaps(self) -> list[str]:
+        """Return the PCAP paths to analyze (multi-select list, or the typed path)."""
+        # Use the multi-select list only if the field still shows our summary;
+        # if the user edited the field, treat its text as a single path.
+        if len(self.selected_pcaps) > 1 and self.pcap_var.get() == self._pcap_summary:
+            return self.selected_pcaps
+        text = self.pcap_var.get().strip()
+        return [text] if text else []
 
     def _browse_yara(self):
         path = filedialog.askopenfilename(
@@ -541,12 +567,9 @@ class App(_Root):
 
         if not paths:
             return
-        chosen = paths[0]
-        if chosen.lower().endswith((".pcap", ".pcapng", ".cap")):
-            self.pcap_var.set(chosen)
-        else:
-            # Best-effort: still set it; analyzer will error if it's not a pcap
-            self.pcap_var.set(chosen)
+        # Prefer capture files when multiple items are dropped; fall back to all.
+        pcaps = [p for p in paths if p.lower().endswith((".pcap", ".pcapng", ".cap"))]
+        self._set_pcaps(pcaps or paths)
 
     # ------------------------------------------------------------------
     # Theme toggle
@@ -567,13 +590,13 @@ class App(_Root):
         if self.is_running:
             return
 
-        pcap = self.pcap_var.get().strip()
-        if not pcap:
-            messagebox.showerror("Missing PCAP", "Please select a PCAP file to analyze.")
+        pcaps = self._get_pcaps()
+        if not pcaps:
+            messagebox.showerror("Missing PCAP", "Please select one or more PCAP files to analyze.")
             return
-        pcap_path = Path(pcap)
-        if not pcap_path.exists():
-            messagebox.showerror("Not found", f"PCAP not found:\n{pcap_path}")
+        missing = [p for p in pcaps if not Path(p).exists()]
+        if missing:
+            messagebox.showerror("Not found", "PCAP(s) not found:\n" + "\n".join(missing))
             return
 
         if self.yara_var.get():
@@ -600,14 +623,17 @@ class App(_Root):
         self._set_running_state()
         self.start_time = time.time()
 
-        cmd = self._build_command(pcap_path)
+        cmd = self._build_command(pcaps)
         self._append_log(f"$ {' '.join(self._quote_cmd(cmd))}\n", tag="section")
 
         self.run_thread = threading.Thread(target=self._run_subprocess, args=(cmd,), daemon=True)
         self.run_thread.start()
 
-    def _build_command(self, pcap_path: Path) -> list[str]:
-        cmd = [resolve_analyzer_python(), "-u", str(ANALYZER_PATH), str(pcap_path)]
+    def _build_command(self, pcaps) -> list[str]:
+        if isinstance(pcaps, (str, Path)):
+            pcaps = [pcaps]
+        cmd = [resolve_analyzer_python(), "-u", str(ANALYZER_PATH)]
+        cmd += [str(p) for p in pcaps]
 
         if self.case_var.get().strip():
             cmd += ["--case", self.case_var.get().strip()]

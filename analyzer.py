@@ -393,12 +393,128 @@ def build_dns_resolution_map(dns_rows: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Multi-PCAP case consolidation
+# ---------------------------------------------------------------------------
+
+def _dedup_combined_iocs(rows: list[dict]) -> list[dict]:
+    """Deduplicate merged IOC rows by (type, value), keeping highest confidence
+    and recording every source PCAP the indicator was seen in."""
+    order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    best: dict[tuple, dict] = {}
+    for row in rows:
+        key = (row.get("ioc_type", ""), (row.get("value", "") or "").lower())
+        existing = best.get(key)
+        if existing is None:
+            best[key] = row
+            continue
+        sources = {s for s in (existing.get("source_pcap", ""), row.get("source_pcap", "")) if s}
+        merged_sources = "; ".join(sorted(sources))
+        if order.get(row.get("confidence", "LOW"), 3) < order.get(existing.get("confidence", "LOW"), 3):
+            row["source_pcap"] = merged_sources
+            best[key] = row
+        else:
+            existing["source_pcap"] = merged_sources
+    return list(best.values())
+
+
+def _merge_source_reports(source_dirs, case_output_dir) -> dict:
+    """Sum the numeric counts across per-source report.json files."""
+    import json
+    merged: dict = {}
+    for _label, sub_dir in source_dirs:
+        report_path = sub_dir / "report.json"
+        if not report_path.exists():
+            continue
+        try:
+            data = json.loads(report_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for key, value in data.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            merged[key] = merged.get(key, 0) + value
+    merged["case_output_dir"] = str(case_output_dir)
+    merged["source_pcaps"] = [label for label, _ in source_dirs]
+    return merged
+
+
+def build_combined_case_outputs(case_output_dir, source_dirs, args):
+    """
+    Merge the per-source CSV outputs into a single consolidated set at the case
+    root plus one combined workbook. Each row gains a source_pcap column; IOCs
+    are de-duplicated, the timeline is re-sorted chronologically, and alerts are
+    re-sorted by severity.
+    """
+    import csv
+
+    print("\n" + "=" * 70)
+    print(f"[*] Consolidating {len(source_dirs)} sources into the case folder")
+
+    csv_names = set()
+    for _label, sub_dir in source_dirs:
+        for path in sub_dir.glob("*.csv"):
+            csv_names.add(path.name)
+
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+    for name in sorted(csv_names):
+        combined_rows = []
+        fieldnames: list[str] = []
+        for label, sub_dir in source_dirs:
+            path = sub_dir / name
+            if not path.exists():
+                continue
+            with open(path, newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                for field in (reader.fieldnames or []):
+                    if field not in fieldnames:
+                        fieldnames.append(field)
+                for row in reader:
+                    row["source_pcap"] = label
+                    combined_rows.append(row)
+
+        if not combined_rows:
+            continue
+        if "source_pcap" not in fieldnames:
+            fieldnames = ["source_pcap"] + fieldnames
+
+        if name == "iocs.csv":
+            combined_rows = _dedup_combined_iocs(combined_rows)
+        elif name == "timeline.csv":
+            combined_rows.sort(key=lambda r: r.get("timestamp", "") or "")
+        elif name == "alerts.csv":
+            combined_rows.sort(
+                key=lambda r: severity_order.get(r.get("severity", "INFO"), 4)
+            )
+
+        with open(case_output_dir / name, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(combined_rows)
+
+    write_json(case_output_dir / "report.json", _merge_source_reports(source_dirs, case_output_dir))
+
+    print("[*] Building consolidated Excel workbook")
+    workbook_path = build_excel_workbook(case_output_dir)
+    if workbook_path:
+        print(f"[+] Consolidated workbook: {workbook_path}")
+    print("    Per-source detail (streams, payloads, carved files) is in the source_* subfolders.")
+    # Final line points the GUI's summary card at the consolidated case root.
+    print(f"\n[+] Results written to: {case_output_dir}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="PCAP Security Toolkit")
-    parser.add_argument("pcap", help="Path to a .pcap or .pcapng file")
+    parser.add_argument(
+        "pcap",
+        nargs="+",
+        help="Path(s) to .pcap/.pcapng file(s). Multiple captures are analyzed "
+             "into one case folder with a single consolidated workbook.",
+    )
     parser.add_argument("--top", type=int, default=10, help="Top N rows to summarize")
     parser.add_argument("--case", help="Optional case folder name")
     parser.add_argument(
@@ -467,9 +583,10 @@ def main():
     )
     args = parser.parse_args()
 
-    pcap_path = Path(args.pcap)
-    if not pcap_path.exists():
-        raise FileNotFoundError(f"PCAP not found: {pcap_path}")
+    pcap_paths = [Path(p) for p in args.pcap]
+    for path in pcap_paths:
+        if not path.exists():
+            raise FileNotFoundError(f"PCAP not found: {path}")
 
     case_output_dir = get_case_output_dir(OUTPUT_DIR, args.case)
 
@@ -499,6 +616,44 @@ def main():
         else:
             print(f"[!] TLS key-log file not found, skipping decryption: {keylog_path}")
 
+    # Merge external threat-intel feeds into the JA3/JA4/JARM detection tables.
+    intel_dir = Path(args.intel_dir) if args.intel_dir else (BASE_DIR / "intel")
+    intel_counts = load_intel_feeds(intel_dir)
+    if any(intel_counts.values()):
+        print(
+            f"[*] Loaded threat-intel feeds from {intel_dir}: "
+            f"+{intel_counts['ja3']} JA3, +{intel_counts['ja4']} JA4, "
+            f"+{intel_counts['jarm']} JARM"
+        )
+
+    run_context = {
+        "decode_as_rules": decode_as_rules,
+        "tls_keylog_active": tls_keylog_active,
+        "intel_counts": intel_counts,
+    }
+
+    if len(pcap_paths) == 1:
+        analyze_pcap(pcap_paths[0], args, case_output_dir, run_context)
+    else:
+        print(f"[*] Multi-PCAP case: {len(pcap_paths)} captures -> {case_output_dir}")
+        source_dirs = []
+        for index, path in enumerate(pcap_paths, 1):
+            sub_dir = case_output_dir / f"source_{index}_{path.stem}"
+            print("\n" + "#" * 70)
+            print(f"# Source {index}/{len(pcap_paths)}: {path.name}")
+            print("#" * 70)
+            analyze_pcap(path, args, sub_dir, run_context)
+            source_dirs.append((path.name, sub_dir))
+        build_combined_case_outputs(case_output_dir, source_dirs, args)
+
+
+def analyze_pcap(pcap_path, args, case_output_dir, run_context):
+    """Run the full analysis for one PCAP, writing all outputs to case_output_dir."""
+    case_output_dir.mkdir(parents=True, exist_ok=True)
+    decode_as_rules = run_context["decode_as_rules"]
+    tls_keylog_active = run_context["tls_keylog_active"]
+    intel_counts = run_context["intel_counts"]
+
     # Scale TShark concurrency and per-process memory to the capture size. Many
     # parallel passes on a multi-gigabyte capture can exhaust RAM, so reduce the
     # worker count and, for huge files, reset dissector state periodically (-M).
@@ -518,16 +673,6 @@ def main():
             f"{effective_workers} parallel TShark workers"
             + (" with periodic session reset (-M)" if pcap_size >= HUGE_PCAP_BYTES else "")
             + " to limit memory use"
-        )
-
-    # Merge external threat-intel feeds into the JA3/JA4/JARM detection tables.
-    intel_dir = Path(args.intel_dir) if args.intel_dir else (BASE_DIR / "intel")
-    intel_counts = load_intel_feeds(intel_dir)
-    if any(intel_counts.values()):
-        print(
-            f"[*] Loaded threat-intel feeds from {intel_dir}: "
-            f"+{intel_counts['ja3']} JA3, +{intel_counts['ja4']} JA4, "
-            f"+{intel_counts['jarm']} JARM"
         )
 
     # ------------------------------------------------------------------
