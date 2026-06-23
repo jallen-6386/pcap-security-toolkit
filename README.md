@@ -306,6 +306,7 @@ analyzer.py [-h] [--top N] [--case NAME]
 | `--geoip-db` | auto | Path to GeoLite2 .mmdb database file |
 | `--yara-rules` | off | Path to a YARA rules file or directory to scan carved files and payloads |
 | `--jarm-probe` | off | Actively fingerprint observed TLS servers with JARM (requires outbound connectivity) |
+| `--ja4-recompute` | off | Always compute JA4 with the built-in (FoxIO-verified) implementation, overriding TShark's native value — use when your Wireshark predates JA4 or its native value differs from the FoxIO reference |
 | `--min-ioc-confidence` | LOW | Drop IOCs below this confidence from iocs.csv and the STIX bundle (MEDIUM removes flow-only IPs, user-agents, JA4S; HIGH keeps only corroborated indicators) |
 | `--decode-as` | — | Force a dissector for a non-standard port, e.g. `tcp.port==8888,http` (repeatable). Applies to all TShark extraction, statistics, and JA4 passes |
 | `--intel-dir` | intel/ | Directory of JA3/JA4/JARM threat-intel feed CSVs to merge into the detection tables |
@@ -498,6 +499,9 @@ To keep findings actionable, several detectors are tuned against benign noise (n
 ### malicious_ja3.csv
 TLS sessions matching known-malicious JA3 fingerprints:
 - Cobalt Strike, Metasploit Meterpreter, Dridex, Trickbot, Emotet, AgentTesla, AsyncRAT, njRAT, Mirai
+
+### JA4 fingerprints (`tls_metadata.csv`)
+TLS JA4 client fingerprints come from TShark's native `tls.handshake.ja4` field (Wireshark 4.4+) when available, otherwise from a built-in implementation validated byte-for-byte against TShark 4.6 native output (FoxIO-correct, GREASE-aware). The `ja4_source` column records which was used (`tshark_native` or `computed`). If your Wireshark predates JA4 or its native value differs from the FoxIO reference (or another tool such as ExtraHop), pass `--ja4-recompute` to force the built-in computation.
 
 ### malicious_ja4.csv
 TLS sessions matching known-malicious JA4 fingerprints:

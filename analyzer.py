@@ -583,6 +583,13 @@ def main():
         help="Actively probe observed TLS servers with JARM fingerprinting (requires outbound connectivity)",
     )
     parser.add_argument(
+        "--ja4-recompute",
+        action="store_true",
+        help="Always compute JA4 with the built-in (FoxIO-verified) implementation, "
+             "overriding TShark's native value. Use when the installed Wireshark "
+             "predates JA4 or its native value differs from the FoxIO reference.",
+    )
+    parser.add_argument(
         "--min-ioc-confidence",
         choices=["LOW", "MEDIUM", "HIGH"],
         default="LOW",
@@ -1008,7 +1015,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
 
     if tls_summary:
         print("[*] Enriching TLS metadata with JA4 fingerprints")
-        enrich_tls_summary_with_ja4(tls_summary, pcap_path)
+        enrich_tls_summary_with_ja4(tls_summary, pcap_path, force_compute=args.ja4_recompute)
         print("[*] Detecting TLS SNI anomalies")
         tls_sni_anomalies = detect_tls_sni_anomalies(tls_summary)
         print("[*] Detecting malicious JA3/JA4 fingerprints")

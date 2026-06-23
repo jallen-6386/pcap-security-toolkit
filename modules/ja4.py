@@ -84,13 +84,22 @@ _JA4H_EXCLUDE_FROM_HASH = {"cookie"}
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _parse_hex(value: str) -> int | None:
-    """Parse a hex value (with or without '0x' prefix) to int. Returns None on failure."""
-    v = value.strip().lower().lstrip("0x")
+def _parse_num(value: str) -> int | None:
+    """
+    Parse one TShark numeric field value to int.
+
+    TShark renders fields inconsistently: cipher suites, versions and signature
+    algorithms come hex-prefixed ("0x1301"), while extension types come in
+    decimal ("16"). So a "0x" prefix means hex; otherwise the value is decimal.
+    Returns None on failure.
+    """
+    v = value.strip().lower()
     if not v:
         return None
     try:
-        return int(v, 16)
+        if v.startswith("0x"):
+            return int(v[2:], 16)
+        return int(v, 10)
     except ValueError:
         return None
 
@@ -100,11 +109,11 @@ def _sha256_12(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()[:12]
 
 
-def _parse_int_list(raw: str) -> list[int]:
-    """Split a comma-separated hex string into a list of ints, skipping blanks."""
+def _parse_num_list(raw: str) -> list[int]:
+    """Split a comma-separated TShark numeric field into ints, skipping blanks."""
     result = []
     for part in raw.split(","):
-        n = _parse_hex(part)
+        n = _parse_num(part)
         if n is not None:
             result.append(n)
     return result
@@ -153,17 +162,15 @@ def compute_ja4(
     # Prefer highest non-GREASE value from supported_versions extension.
     best_ver = "00"
     if supported_versions_raw and supported_versions_raw.strip():
-        sv_ints = _filter_grease(_parse_int_list(supported_versions_raw))
-        sv_valid = sorted(
-            [v for v in sv_ints if v > 0x0200],
-            reverse=True,
-        )
+        sv_ints = _filter_grease(_parse_num_list(supported_versions_raw))
+        sv_valid = sorted([v for v in sv_ints if v >= 0x0300], reverse=True)
         if sv_valid:
             best_ver = _TLS_VERSION_MAP.get(f"{sv_valid[0]:04x}", "00")
 
-    if best_ver == "00" and tls_version_hex and tls_version_hex.strip():
-        normalized = tls_version_hex.strip().lower().lstrip("0x").zfill(4)
-        best_ver = _TLS_VERSION_MAP.get(normalized, "00")
+    if best_ver == "00":
+        rec = _parse_num(tls_version_hex or "")
+        if rec is not None:
+            best_ver = _TLS_VERSION_MAP.get(f"{rec:04x}", "00")
 
     # --- SNI indicator ---
     sni = (sni or "").strip()
@@ -174,34 +181,32 @@ def compute_ja4(
     )
 
     # --- Cipher suites (non-GREASE) ---
-    cs_ints = _filter_grease(_parse_int_list(ciphersuites_raw or ""))
-    num_ciphers = len(cs_ints)
+    cs_ints = _filter_grease(_parse_num_list(ciphersuites_raw or ""))
+    num_ciphers = min(len(cs_ints), 99)
 
-    # --- Extensions (non-GREASE) ---
-    ext_ints = _filter_grease(_parse_int_list(extensions_raw or ""))
-    num_extensions = len(ext_ints)
+    # --- Extensions (non-GREASE) — the count includes SNI and ALPN. ---
+    ext_ints = _filter_grease(_parse_num_list(extensions_raw or ""))
+    num_extensions = min(len(ext_ints), 99)
 
-    # --- ALPN first value (first 2 chars) ---
+    # --- ALPN: first + last character of the first ALPN value ---
     alpn_val = "00"
     if alpn_raw and alpn_raw.strip():
         first_alpn = alpn_raw.split(",")[0].strip()
-        if len(first_alpn) >= 2:
-            alpn_val = first_alpn[:2]
-        elif len(first_alpn) == 1:
-            alpn_val = first_alpn + "0"
+        if first_alpn:
+            alpn_val = first_alpn[0] + first_alpn[-1]
 
     # --- Part A (human-readable prefix) ---
     part_a = f"{protocol}{best_ver}{sni_flag}{num_ciphers:02d}{num_extensions:02d}{alpn_val}"
 
     # --- Part B: sorted cipher suites → SHA-256[:12] ---
-    cs_sorted_hex = ",".join(f"{c:04x}" for c in sorted(cs_ints))
-    part_b = _sha256_12(cs_sorted_hex)
+    part_b = _sha256_12(",".join(f"{c:04x}" for c in sorted(cs_ints)))
 
-    # --- Part C: sorted extensions + "_" + sig algs → SHA-256[:12] ---
-    ext_sorted_hex = ",".join(f"{e:04x}" for e in sorted(ext_ints))
-    sig_ints = _parse_int_list(sig_algs_raw or "")
-    sig_hex = ",".join(f"{s:04x}" for s in sig_ints)
-    part_c = _sha256_12(f"{ext_sorted_hex}_{sig_hex}")
+    # --- Part C: sorted extensions (SNI 0x0000 and ALPN 0x0010 removed) +
+    #     "_" + signature algorithms (original order) → SHA-256[:12] ---
+    ext_for_hash = sorted(e for e in ext_ints if e not in (0x0000, 0x0010))
+    ext_hex = ",".join(f"{e:04x}" for e in ext_for_hash)
+    sig_hex = ",".join(f"{s:04x}" for s in _parse_num_list(sig_algs_raw or ""))
+    part_c = _sha256_12(f"{ext_hex}_{sig_hex}")
 
     return f"{part_a}_{part_b}_{part_c}"
 
@@ -257,27 +262,38 @@ def extract_tls_handshake_raw_for_ja4(pcap_path) -> tuple[list[dict], str | None
     return list(reader), None
 
 
-def enrich_tls_summary_with_ja4(tls_summary: list[dict], pcap_path) -> list[dict]:
+def enrich_tls_summary_with_ja4(tls_summary: list[dict], pcap_path, force_compute=False) -> list[dict]:
     """
     Ensure every row in tls_summary has a populated ja4 field.
 
     Priority:
       1. Use ja4 value already extracted natively by TShark (4.4+).
-      2. Compute ja4 from raw ClientHello fields via Python fallback.
+      2. Compute ja4 from raw ClientHello fields via the (FoxIO-verified) Python
+         implementation.
+
+    With force_compute=True the Python computation is always used and overrides
+    native values — useful when the installed TShark/Wireshark predates JA4 or
+    its early native implementation differs from the FoxIO reference.
 
     Modifies tls_summary in-place and also returns it.
     """
     if not tls_summary:
         return tls_summary
 
-    # If any row already has a non-empty native JA4, TShark supports it —
-    # use native values for all rows and skip computation.
+    # If TShark already populated native JA4 and we are not forcing a recompute,
+    # use the native values (tagging their source) and skip computation.
     has_native = any((r.get("ja4") or "").strip() for r in tls_summary)
-    if has_native:
+    if has_native and not force_compute:
+        for row in tls_summary:
+            if (row.get("ja4") or "").strip():
+                row["ja4_source"] = "tshark_native"
         return tls_summary
 
     raw_rows, err = extract_tls_handshake_raw_for_ja4(pcap_path)
     if err or not raw_rows:
+        for row in tls_summary:
+            if (row.get("ja4") or "").strip():
+                row["ja4_source"] = "tshark_native"
         return tls_summary
 
     # Build a map: tcp_stream → computed ja4 (first ClientHello per stream)
@@ -305,10 +321,12 @@ def enrich_tls_summary_with_ja4(tls_summary: list[dict], pcap_path) -> list[dict
 
     for row in tls_summary:
         tcp_stream = (row.get("tcp_stream") or "").strip()
-        if not row.get("ja4") and tcp_stream in stream_ja4:
+        if tcp_stream in stream_ja4:
+            # Prefer the computed value (fills when native is absent; overrides
+            # when force_compute is set).
             row["ja4"] = stream_ja4[tcp_stream]
             row["ja4_source"] = "computed"
-        elif row.get("ja4"):
+        elif (row.get("ja4") or "").strip():
             row["ja4_source"] = "tshark_native"
         else:
             row["ja4_source"] = ""

@@ -377,6 +377,16 @@ class App(_Root):
             variable=self.jarm_var,
         ).pack(side="left")
 
+        # JA4 recompute
+        row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=3)
+        self.ja4_recompute_var = tk.BooleanVar(value=False)
+        ctk.CTkSwitch(
+            row,
+            text="Recompute JA4 (FoxIO)  (override TShark's native JA4; use on older Wireshark)",
+            variable=self.ja4_recompute_var,
+        ).pack(side="left")
+
         # YARA
         row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
         row.pack(fill="x", padx=15, pady=3)
@@ -665,6 +675,8 @@ class App(_Root):
 
         if self.jarm_var.get():
             cmd += ["--jarm-probe"]
+        if self.ja4_recompute_var.get():
+            cmd += ["--ja4-recompute"]
 
         if self.yara_var.get() and self.yara_path_var.get().strip():
             cmd += ["--yara-rules", self.yara_path_var.get().strip()]
