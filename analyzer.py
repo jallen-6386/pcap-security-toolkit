@@ -263,7 +263,7 @@ def build_timeline(
     credential_posts: list[dict],
     file_indicators: list[dict],
     http_response_anomalies: list[dict],
-    flow_times: dict,
+    flow_time_stats: dict,
 ) -> list[dict]:
     """Assemble a chronologically sorted event timeline from all detection results."""
     events = []
@@ -322,13 +322,13 @@ def build_timeline(
              f"{item.get('protocol')} — {item.get('filename')}", "T1105")
 
     for item in beaconing_candidates:
-        # Use first seen timestamp from flow_times if available
+        # Use the flow's earliest timestamp (tracked in the online stats).
         flow_key = (
             item.get("src_ip"), item.get("dst_ip"),
             item.get("sport"), item.get("dport"), item.get("protocol"),
         )
-        times = flow_times.get(flow_key, [])
-        ts = str(min(times)) if times else ""
+        stat = flow_time_stats.get(flow_key)
+        ts = str(stat["min"]) if stat and stat.get("min") is not None else ""
         _add(ts, "BEACONING", item.get("src_ip"), item.get("dst_ip"),
              f"jitter={item.get('jitter_pct')}% avg_interval={item.get('avg_interval_sec')}s",
              "T1071.001")
@@ -702,7 +702,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
     extracted_payloads = []
     carved_files = []
 
-    beaconing_candidates = detect_beaconing(flow_data["flow_times"], flow_data["flow_bytes"])
+    beaconing_candidates = detect_beaconing(flow_data["flow_time_stats"], flow_data["flow_bytes"])
     credential_findings = []
     credential_posts = []
     suspicious_downloads = []
@@ -957,9 +957,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         suspicious_user_agents = detect_suspicious_user_agents(http_rows)
 
     print("[*] Detecting lateral movement candidates")
-    lateral_movement_candidates = detect_lateral_movement(
-        flow_data["flow_bytes"], flow_data["flow_times"]
-    )
+    lateral_movement_candidates = detect_lateral_movement(flow_data["flow_bytes"])
 
     print("[*] Detecting protocol anomalies")
     protocol_anomaly_findings = detect_protocol_anomalies(
@@ -1129,7 +1127,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         credential_posts=credential_posts,
         file_indicators=file_indicators,
         http_response_anomalies=http_response_anomalies,
-        flow_times=flow_data["flow_times"],
+        flow_time_stats=flow_data["flow_time_stats"],
     )
 
     # ------------------------------------------------------------------

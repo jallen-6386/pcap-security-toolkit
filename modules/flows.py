@@ -14,6 +14,38 @@ from modules.dns_http_tls import parse_http_payload
 from modules.utils import human_readable_bytes, safe_decode
 
 
+def _new_flow_time_stat() -> dict:
+    """Accumulator for a flow's inter-arrival timing (used by beaconing)."""
+    return {
+        "packets": 0,    # total packets in the flow
+        "deltas": 0,     # number of positive inter-arrival gaps
+        "sum": 0.0,      # sum of gaps (for mean)
+        "sum_sq": 0.0,   # sum of gaps^2 (for variance/stdev)
+        "last": None,    # last timestamp seen
+        "min": None,     # earliest timestamp (for the timeline)
+    }
+
+
+def _update_flow_time_stat(stat: dict, timestamp: float) -> None:
+    """Fold one packet timestamp into a flow's online timing statistics.
+
+    Assumes packets arrive in capture (chronological) order within a flow,
+    which holds for a single capture; gaps are computed against the prior
+    timestamp rather than storing every timestamp.
+    """
+    stat["packets"] += 1
+    if stat["min"] is None or timestamp < stat["min"]:
+        stat["min"] = timestamp
+    last = stat["last"]
+    if last is not None and timestamp > last:
+        gap = round(timestamp - last, 3)
+        stat["deltas"] += 1
+        stat["sum"] += gap
+        stat["sum_sq"] += gap * gap
+    if last is None or timestamp > last:
+        stat["last"] = timestamp
+
+
 def analyze_flows(packets):
     ip_counter = Counter()
     protocol_counter = Counter()
@@ -101,7 +133,9 @@ def analyze_packets(packets):
     conversation_counter = Counter()
     flow_bytes = defaultdict(int)
     flow_packets = defaultdict(int)
-    flow_times = defaultdict(list)
+    # Online inter-arrival statistics per flow (for beaconing) instead of a
+    # timestamp per packet — keeps memory O(flows), not O(packets).
+    flow_time_stats = defaultdict(_new_flow_time_stat)
 
     dns_queries = Counter()
     http_hosts = Counter()
@@ -158,9 +192,11 @@ def analyze_packets(packets):
 
         if hasattr(pkt, "time"):
             try:
-                flow_times[flow_key].append(float(pkt.time))
+                ts = float(pkt.time)
             except Exception:
-                pass
+                ts = None
+            if ts is not None:
+                _update_flow_time_stat(flow_time_stats[flow_key], ts)
 
         # --- HTTP request summary (plaintext payloads only)
         if has_ip and Raw in pkt:
@@ -193,7 +229,7 @@ def analyze_packets(packets):
             "conversation_counter": conversation_counter,
             "flow_bytes": flow_bytes,
             "flow_packets": flow_packets,
-            "flow_times": flow_times,
+            "flow_time_stats": flow_time_stats,
         },
         "protocol": {
             "dns_queries": dns_queries,

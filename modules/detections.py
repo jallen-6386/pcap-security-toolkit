@@ -1,6 +1,5 @@
 import math
 import re
-import statistics
 from collections import defaultdict
 from pathlib import Path
 
@@ -334,28 +333,24 @@ def build_suspicious_downloads(http_rows: list[dict], extracted_payloads: list[d
     return downloads
 
 
-def detect_beaconing(flow_times: dict, flow_bytes: dict) -> list[dict]:
+def detect_beaconing(flow_time_stats: dict, flow_bytes: dict) -> list[dict]:
     findings = []
 
-    for flow, timestamps in flow_times.items():
-        if len(timestamps) < 5:
+    for flow, stat in flow_time_stats.items():
+        if stat.get("packets", 0) < 5:
             continue
 
-        sorted_times = sorted(timestamps)
-        deltas = [
-            round(sorted_times[i] - sorted_times[i - 1], 3)
-            for i in range(1, len(sorted_times))
-            if sorted_times[i] > sorted_times[i - 1]
-        ]
-
-        if len(deltas) < 4:
+        n_deltas = stat.get("deltas", 0)
+        if n_deltas < 4:
             continue
 
-        mean_delta = statistics.mean(deltas)
-        stdev_delta = statistics.pstdev(deltas)
-
+        mean_delta = stat["sum"] / n_deltas
         if mean_delta <= 1:
             continue
+
+        # Population variance from the running sums (clamped against float error).
+        variance = max(0.0, stat["sum_sq"] / n_deltas - mean_delta * mean_delta)
+        stdev_delta = variance ** 0.5
 
         jitter_pct = round((stdev_delta / mean_delta) * 100, 2) if mean_delta else 0.0
         if jitter_pct <= 20:
@@ -366,7 +361,7 @@ def detect_beaconing(flow_times: dict, flow_bytes: dict) -> list[dict]:
                 "sport": sport,
                 "dport": dport,
                 "protocol": proto,
-                "packet_count": len(timestamps),
+                "packet_count": stat["packets"],
                 "avg_interval_sec": round(mean_delta, 3),
                 "stdev_interval_sec": round(stdev_delta, 3),
                 "jitter_pct": jitter_pct,
@@ -658,7 +653,7 @@ def detect_suspicious_user_agents(http_rows: list[dict]) -> list[dict]:
     return findings
 
 
-def detect_lateral_movement(flow_bytes: dict, flow_times: dict) -> list[dict]:
+def detect_lateral_movement(flow_bytes: dict) -> list[dict]:
     """Detect internal SMB spread and TCP port-scan patterns consistent with lateral movement."""
     findings = []
 

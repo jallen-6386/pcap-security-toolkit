@@ -3,6 +3,7 @@
 import unittest
 
 from modules.utils import is_private_ip, is_special_use_ip, is_noise_ip
+from modules.flows import _new_flow_time_stat, _update_flow_time_stat
 from modules.detections import (
     build_alerts,
     build_suspicious_downloads,
@@ -11,6 +12,14 @@ from modules.detections import (
     detect_suspicious_user_agents,
     detect_tls_sni_anomalies,
 )
+
+
+def _time_stats(timestamps):
+    """Build a flow's online time-stats accumulator from a list of timestamps."""
+    stat = _new_flow_time_stat()
+    for ts in timestamps:
+        _update_flow_time_stat(stat, float(ts))
+    return stat
 
 
 class TestIPClassification(unittest.TestCase):
@@ -63,13 +72,13 @@ class TestDNSTunnelingTuning(unittest.TestCase):
 
 class TestBeaconingDowngrade(unittest.TestCase):
     def test_benign_infra_downgraded_to_info(self):
-        ft = {("10.0.0.5", "8.8.8.8", "5000", "53", "UDP"): [0, 10, 20, 30, 40, 50]}
+        ft = {("10.0.0.5", "8.8.8.8", "5000", "53", "UDP"): _time_stats([0, 10, 20, 30, 40, 50])}
         alerts = build_alerts({}, [], beaconing_candidates=detect_beaconing(ft, {k: 1 for k in ft}))
         beacon = [a for a in alerts if a["alert_type"] == "BEACONING_CANDIDATE"][0]
         self.assertEqual(beacon["severity"], "INFO")
 
     def test_real_destination_stays_high(self):
-        ft = {("10.0.0.5", "45.33.32.156", "5000", "443", "TCP"): [0, 10, 20, 30, 40, 50]}
+        ft = {("10.0.0.5", "45.33.32.156", "5000", "443", "TCP"): _time_stats([0, 10, 20, 30, 40, 50])}
         alerts = build_alerts({}, [], beaconing_candidates=detect_beaconing(ft, {k: 1 for k in ft}))
         beacon = [a for a in alerts if a["alert_type"] == "BEACONING_CANDIDATE"][0]
         self.assertEqual(beacon["severity"], "HIGH")
