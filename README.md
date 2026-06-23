@@ -266,7 +266,7 @@ gui.bat
 - Drag-and-drop PCAP files or click Browse — select multiple to merge them into one case
 - Toggle switches for `--export-streams`, `--jarm-probe`, `--yara-rules`, `--geoip-db`
 - Output format selector (CSV + Excel / HTML / Both)
-- Severity-filter and minimum-IOC-confidence dropdowns, plus decode-as, threat-intel directory, and TLS key-log fields
+- Severity-filter and minimum-IOC-confidence dropdowns, plus decode-as, threat-intel directory, TLS key-log, and max-packets/chunk-size fields
 - Live streaming log with color-coded `[*]`/`[!]`/`[+]` lines
 - Summary card with severity breakdown, top alerts (with MITRE IDs), and detection counts
 - One-click "Open Folder" / "Open Excel Workbook" / "Open HTML Report" buttons
@@ -290,6 +290,7 @@ analyzer.py [-h] [--top N] [--case NAME]
             [--min-ioc-confidence {LOW,MEDIUM,HIGH}]
             [--decode-as RULE]
             [--intel-dir PATH] [--tls-keylog PATH]
+            [--max-packets N] [--chunk-size N]
             pcap
 ```
 
@@ -309,6 +310,8 @@ analyzer.py [-h] [--top N] [--case NAME]
 | `--decode-as` | — | Force a dissector for a non-standard port, e.g. `tcp.port==8888,http` (repeatable). Applies to all TShark extraction, statistics, and JA4 passes |
 | `--intel-dir` | intel/ | Directory of JA3/JA4/JARM threat-intel feed CSVs to merge into the detection tables |
 | `--tls-keylog` | — | Path to a TLS key-log file (SSLKEYLOGFILE format) to decrypt TLS so HTTPS content is extracted like plaintext |
+| `--max-packets` | 0 | Analyze only the first N packets of each capture (quick triage of a very large file); 0 = no limit |
+| `--chunk-size` | 0 | Split each capture into N-packet chunks with editcap and analyze them as one consolidated case (full coverage of a huge capture); 0 = disabled |
 
 ---
 
@@ -329,6 +332,10 @@ analyzer.py [-h] [--top N] [--case NAME]
 
 # Multiple captures into one case (consolidated workbook + per-source detail)
 ./run.sh "/path/to/event1.pcap" "/path/to/event2.pcap" --case incident_42
+
+# Huge capture: triage the first 500k packets, OR fully analyze it in 1M-packet chunks
+./run.sh "/path/to/huge.pcap" --max-packets 500000
+./run.sh "/path/to/huge.pcap" --chunk-size 1000000 --case big_case
 
 # Full malware-hunting profile: stream export, YARA, and JARM probing
 ./run.sh "/path/to/capture.pcapng" --case incident_42 --export-streams \
@@ -626,7 +633,8 @@ The toolkit is built to handle large captures (300,000+ packets) without loading
 - **Name resolution disabled** — all TShark calls use `-n`, avoiding DNS/host lookups that would otherwise add latency and non-determinism on large captures.
 
 **Tuning tips for very large captures:**
-- `--export-streams` adds two TShark follow passes per stream. Keep `--max-streams` modest (default 25) on large files; raise it only when you need deeper payload coverage.
+- `--max-packets N` triages just the first N packets; `--chunk-size N` splits the capture (via editcap) into N-packet pieces analyzed as one consolidated case — full coverage of a huge file without the memory/time cost of one giant pass.
+- `--export-streams` adds a TShark follow pass per stream. Keep `--max-streams` modest (default 25) on large files; raise it only when you need deeper payload coverage.
 - `--jarm-probe` makes live outbound network connections and is the slowest optional step — enable it only when you intend to fingerprint observed servers.
 - Lower `TSHARK_MAX_WORKERS` if running on a memory-constrained host, or raise it on a many-core workstation.
 

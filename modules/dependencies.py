@@ -26,3 +26,24 @@ def find_tshark() -> str | None:
 
 def has_tshark() -> bool:
     return find_tshark() is not None
+
+
+@lru_cache(maxsize=1)
+def find_editcap() -> str | None:
+    editcap = shutil.which("editcap")
+    if editcap:
+        return editcap
+
+    possible_paths = [
+        r"C:\Program Files\Wireshark\editcap.exe",
+        r"C:\Program Files (x86)\Wireshark\editcap.exe",
+        "/opt/homebrew/bin/editcap",
+        "/usr/local/bin/editcap",
+        "/usr/bin/editcap",
+    ]
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+
+    return None

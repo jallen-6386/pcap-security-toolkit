@@ -119,9 +119,12 @@ def analyze_flows(packets):
     }
 
 
-def analyze_packets(packets):
+def analyze_packets(packets, max_packets=0):
     """
     Single-pass combined analysis: flow statistics plus DNS/HTTP summaries.
+
+    *max_packets* (>0) stops after that many packets, for first-N-packet triage
+    of very large captures.
 
     Replaces the previous two separate streaming passes (analyze_flows +
     analyze_dns_http_tls), halving Scapy dissection cost on large captures.
@@ -146,6 +149,8 @@ def analyze_packets(packets):
     total_bytes = 0
 
     for pkt in packets:
+        if max_packets and total_packets >= max_packets:
+            break
         total_packets += 1
         pkt_len = len(pkt)
         total_bytes += pkt_len

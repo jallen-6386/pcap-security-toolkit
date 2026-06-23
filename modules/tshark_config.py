@@ -17,6 +17,7 @@ import re
 _DECODE_AS_RULES: list[str] = []
 _TLS_KEYLOG_FILE: str = ""
 _SESSION_RESET: int = 0
+_PACKET_LIMIT: int = 0
 
 # A decode-as rule looks like: tcp.port==8888,http  (selector==value,protocol)
 _RULE_RE = re.compile(r"^[^=,\s]+==[^,\s]+,[^,\s]+$")
@@ -57,11 +58,25 @@ def get_session_reset() -> int:
     return _SESSION_RESET
 
 
+def set_packet_limit(count) -> None:
+    """Limit TShark to the first N packets (0 = no limit)."""
+    global _PACKET_LIMIT
+    try:
+        _PACKET_LIMIT = max(0, int(count or 0))
+    except (TypeError, ValueError):
+        _PACKET_LIMIT = 0
+
+
+def get_packet_limit() -> int:
+    return _PACKET_LIMIT
+
+
 def runtime_args() -> list[str]:
     """Return the TShark args for all active runtime options.
 
-    Covers decode-as rules, a TLS key-log file, and (for very large captures)
-    a -M session-reset interval that bounds per-process memory growth.
+    Covers decode-as rules, a TLS key-log file, a -M session-reset interval
+    that bounds per-process memory on very large captures, and a -c packet
+    limit for first-N-packet triage.
     """
     args: list[str] = []
     for rule in _DECODE_AS_RULES:
@@ -70,6 +85,8 @@ def runtime_args() -> list[str]:
         args.extend(["-o", f"tls.keylog_file:{_TLS_KEYLOG_FILE}"])
     if _SESSION_RESET:
         args.extend(["-M", str(_SESSION_RESET)])
+    if _PACKET_LIMIT:
+        args.extend(["-c", str(_PACKET_LIMIT)])
     return args
 
 

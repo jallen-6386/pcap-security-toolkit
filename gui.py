@@ -351,6 +351,22 @@ class App(_Root):
         self.max_streams_var = tk.StringVar(value="25")
         ctk.CTkEntry(row, textvariable=self.max_streams_var, width=60).pack(side="left")
 
+        # Large-capture handling (0 = off)
+        row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=3)
+        ctk.CTkLabel(row, text="Max packets:").pack(side="left")
+        self.max_packets_var = tk.StringVar(value="0")
+        ctk.CTkEntry(row, textvariable=self.max_packets_var, width=90).pack(side="left", padx=(5, 15))
+        ctk.CTkLabel(row, text="Chunk size:").pack(side="left")
+        self.chunk_size_var = tk.StringVar(value="0")
+        ctk.CTkEntry(row, textvariable=self.chunk_size_var, width=90).pack(side="left", padx=(5, 10))
+        ctk.CTkLabel(
+            row,
+            text="(0 = off; triage first N packets / split huge captures into N-packet chunks)",
+            font=ctk.CTkFont(size=11),
+            text_color="#888888",
+        ).pack(side="left")
+
         # JARM probe
         row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
         row.pack(fill="x", padx=15, pady=3)
@@ -667,6 +683,14 @@ class App(_Root):
             cmd += ["--intel-dir", self.intel_dir_var.get().strip()]
         if self.tls_keylog_var.get().strip():
             cmd += ["--tls-keylog", self.tls_keylog_var.get().strip()]
+        for flag, var in (("--max-packets", self.max_packets_var),
+                          ("--chunk-size", self.chunk_size_var)):
+            try:
+                value = int(var.get())
+            except ValueError:
+                value = 0
+            if value > 0:
+                cmd += [flag, str(value)]
         return cmd
 
     @staticmethod

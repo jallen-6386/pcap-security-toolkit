@@ -6,6 +6,8 @@ Version: 2.3.0
 """
 
 import argparse
+import shutil
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -29,7 +31,7 @@ from config import (
     TSHARK_MAX_WORKERS,
 )
 from modules.cases import get_case_output_dir
-from modules.dependencies import has_tshark
+from modules.dependencies import find_editcap, has_tshark
 from modules.detections import (
     _SEVERITY_ORDER,
     build_alerts,
@@ -110,6 +112,7 @@ from modules.http_objects import export_http_objects
 from modules.tshark_config import (
     is_valid_decode_as,
     set_decode_as,
+    set_packet_limit,
     set_session_reset,
     set_tls_keylog,
 )
@@ -396,6 +399,32 @@ def build_dns_resolution_map(dns_rows: list[dict]) -> list[dict]:
 # Multi-PCAP case consolidation
 # ---------------------------------------------------------------------------
 
+def _chunk_pcaps(pcap_paths, chunk_size, work_dir):
+    """
+    Split each capture into chunk_size-packet pieces with editcap, returning the
+    list of chunk paths (analyzed afterward as a consolidated multi-PCAP case).
+    Returns None if editcap is unavailable so the caller can fall back.
+    """
+    editcap = find_editcap()
+    if not editcap:
+        print("[!] editcap not found — cannot chunk; analyzing capture(s) as-is")
+        return None
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    chunks = []
+    for src in pcap_paths:
+        base = work_dir / f"{src.stem}_chunk.pcap"
+        result = subprocess.run(
+            [editcap, "-c", str(chunk_size), str(src), str(base)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"[!] editcap failed for {src.name}: {result.stderr.strip()}")
+            continue
+        chunks.extend(sorted(work_dir.glob(f"{src.stem}_chunk_*.pcap")))
+    return chunks
+
+
 def _dedup_combined_iocs(rows: list[dict]) -> list[dict]:
     """Deduplicate merged IOC rows by (type, value), keeping highest confidence
     and recording every source PCAP the indicator was seen in."""
@@ -581,6 +610,23 @@ def main():
         help="Path to a TLS key-log file (SSLKEYLOGFILE format) to decrypt TLS "
              "sessions, so HTTPS content is extracted like plaintext.",
     )
+    parser.add_argument(
+        "--max-packets",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Analyze only the first N packets of each capture (quick triage of "
+             "a very large file). 0 = no limit (default).",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Split each capture into N-packet chunks with editcap and analyze "
+             "the chunks as one consolidated case (full coverage of a huge "
+             "capture without exhausting memory). 0 = disabled (default).",
+    )
     args = parser.parse_args()
 
     pcap_paths = [Path(p) for p in args.pcap]
@@ -626,25 +672,46 @@ def main():
             f"+{intel_counts['jarm']} JARM"
         )
 
+    if args.max_packets and args.max_packets > 0:
+        set_packet_limit(args.max_packets)
+        print(f"[*] Triage mode: analyzing only the first {args.max_packets} packets per capture")
+
     run_context = {
         "decode_as_rules": decode_as_rules,
         "tls_keylog_active": tls_keylog_active,
         "intel_counts": intel_counts,
     }
 
-    if len(pcap_paths) == 1:
-        analyze_pcap(pcap_paths[0], args, case_output_dir, run_context)
-    else:
-        print(f"[*] Multi-PCAP case: {len(pcap_paths)} captures -> {case_output_dir}")
-        source_dirs = []
-        for index, path in enumerate(pcap_paths, 1):
-            sub_dir = case_output_dir / f"source_{index}_{path.stem}"
-            print("\n" + "#" * 70)
-            print(f"# Source {index}/{len(pcap_paths)}: {path.name}")
-            print("#" * 70)
-            analyze_pcap(path, args, sub_dir, run_context)
-            source_dirs.append((path.name, sub_dir))
-        build_combined_case_outputs(case_output_dir, source_dirs, args)
+    # Optionally split each capture into chunks (full coverage of a huge file
+    # without exhausting memory); the chunks are analyzed as one consolidated case.
+    chunk_work_dir = None
+    if args.chunk_size and args.chunk_size > 0:
+        chunk_work_dir = case_output_dir / "_chunks"
+        print(f"[*] Splitting {len(pcap_paths)} capture(s) into {args.chunk_size}-packet chunks")
+        chunks = _chunk_pcaps(pcap_paths, args.chunk_size, chunk_work_dir)
+        if chunks:
+            print(f"[*] Produced {len(chunks)} chunk(s)")
+            pcap_paths = chunks
+        else:
+            chunk_work_dir = None  # fell back; analyze originals as-is
+
+    try:
+        if len(pcap_paths) == 1:
+            analyze_pcap(pcap_paths[0], args, case_output_dir, run_context)
+        else:
+            print(f"[*] Multi-PCAP case: {len(pcap_paths)} captures -> {case_output_dir}")
+            source_dirs = []
+            for index, path in enumerate(pcap_paths, 1):
+                sub_dir = case_output_dir / f"source_{index}_{path.stem}"
+                print("\n" + "#" * 70)
+                print(f"# Source {index}/{len(pcap_paths)}: {path.name}")
+                print("#" * 70)
+                analyze_pcap(path, args, sub_dir, run_context)
+                source_dirs.append((path.name, sub_dir))
+            build_combined_case_outputs(case_output_dir, source_dirs, args)
+    finally:
+        if chunk_work_dir and chunk_work_dir.exists():
+            shutil.rmtree(chunk_work_dir, ignore_errors=True)
 
 
 def analyze_pcap(pcap_path, args, case_output_dir, run_context):
@@ -680,7 +747,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
     # ------------------------------------------------------------------
     print(f"[*] Loading and analyzing flows + DNS/HTTP from {pcap_path}")
     with PcapReader(str(pcap_path)) as reader:
-        combined = analyze_packets(reader)
+        combined = analyze_packets(reader, max_packets=args.max_packets or 0)
     flow_data = combined["flow"]
     protocol_data = combined["protocol"]
 
