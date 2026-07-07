@@ -91,6 +91,12 @@ def _parse_num(value: str) -> int | None:
     TShark renders fields inconsistently: cipher suites, versions and signature
     algorithms come hex-prefixed ("0x1301"), while extension types come in
     decimal ("16"). So a "0x" prefix means hex; otherwise the value is decimal.
+
+    Older TShark versions (pre-4.x) may omit the "0x" prefix for BASE_HEX
+    fields, outputting cipher suites like "c02b" instead of "0xc02b". As a
+    fallback, if a value fails decimal parsing we try hex, so those ciphers
+    are not silently dropped.
+
     Returns None on failure.
     """
     v = value.strip().lower()
@@ -101,7 +107,11 @@ def _parse_num(value: str) -> int | None:
             return int(v[2:], 16)
         return int(v, 10)
     except ValueError:
-        return None
+        # Fallback: bare hex without "0x" prefix (e.g. "c02b" from older TShark)
+        try:
+            return int(v, 16)
+        except ValueError:
+            return None
 
 
 def _sha256_12(s: str) -> str:
@@ -182,6 +192,11 @@ def compute_ja4(
 
     # --- Cipher suites (non-GREASE) ---
     cs_ints = _filter_grease(_parse_num_list(ciphersuites_raw or ""))
+    if not cs_ints:
+        # A real ClientHello always has at least one cipher suite. Empty means the
+        # TShark extraction returned nothing useful for this packet — return an empty
+        # string rather than a degenerate fingerprint (t??d000000_sha256("")_sha256("_")).
+        return ""
     num_ciphers = min(len(cs_ints), 99)
 
     # --- Extensions (non-GREASE) — the count includes SNI and ALPN. ---
@@ -280,13 +295,19 @@ def enrich_tls_summary_with_ja4(tls_summary: list[dict], pcap_path, force_comput
     if not tls_summary:
         return tls_summary
 
-    # If TShark already populated native JA4 and we are not forcing a recompute,
-    # use the native values (tagging their source) and skip computation.
-    has_native = any((r.get("ja4") or "").strip() for r in tls_summary)
-    if has_native and not force_compute:
+    # Decide whether we need to run the Python computation pass.
+    # Skip it only when every session already has a TShark-native JA4 AND we
+    # are not forcing a recompute — that avoids an extra TShark pass in the
+    # common case (Wireshark 4.4+ with full JA4 support).
+    #
+    # Using any() here is the historical bug: if even one session has native
+    # JA4, all others were left blank.  We use all() so sessions that TShark
+    # couldn't fingerprint (e.g. TLS 1.2 on an early 4.4 build, or non-standard
+    # port traffic) still get a computed value.
+    all_have_native = all((r.get("ja4") or "").strip() for r in tls_summary)
+    if all_have_native and not force_compute:
         for row in tls_summary:
-            if (row.get("ja4") or "").strip():
-                row["ja4_source"] = "tshark_native"
+            row["ja4_source"] = "tshark_native"
         return tls_summary
 
     raw_rows, err = extract_tls_handshake_raw_for_ja4(pcap_path)
@@ -319,14 +340,23 @@ def enrich_tls_summary_with_ja4(tls_summary: list[dict], pcap_path, force_comput
         if ja4:
             stream_ja4[tcp_stream] = ja4
 
+    # Apply per-session: native JA4 is preferred when available (and not
+    # force_compute); computed fills in where native is absent or overrides
+    # when force_compute=True.
     for row in tls_summary:
         tcp_stream = (row.get("tcp_stream") or "").strip()
-        if tcp_stream in stream_ja4:
-            # Prefer the computed value (fills when native is absent; overrides
-            # when force_compute is set).
-            row["ja4"] = stream_ja4[tcp_stream]
+        native = (row.get("ja4") or "").strip()
+        computed = stream_ja4.get(tcp_stream, "")
+
+        if force_compute and computed:
+            row["ja4"] = computed
             row["ja4_source"] = "computed"
-        elif (row.get("ja4") or "").strip():
+        elif native and not force_compute:
+            row["ja4_source"] = "tshark_native"
+        elif computed:
+            row["ja4"] = computed
+            row["ja4_source"] = "computed"
+        elif native:
             row["ja4_source"] = "tshark_native"
         else:
             row["ja4_source"] = ""

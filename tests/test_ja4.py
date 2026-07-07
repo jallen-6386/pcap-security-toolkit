@@ -2,7 +2,27 @@
 
 import unittest
 
-from modules.ja4 import compute_ja4
+from modules.ja4 import compute_ja4, _parse_num
+
+
+class TestParseNum(unittest.TestCase):
+    def test_hex_with_prefix(self):
+        self.assertEqual(_parse_num("0x1301"), 0x1301)
+
+    def test_decimal(self):
+        self.assertEqual(_parse_num("16"), 16)
+
+    def test_hex_without_prefix_fallback(self):
+        # Older TShark omits 0x for BASE_HEX fields; c02b must not be dropped
+        self.assertEqual(_parse_num("c02b"), 0xc02b)
+        self.assertEqual(_parse_num("0a0a"), 0x0a0a)
+
+    def test_empty_returns_none(self):
+        self.assertIsNone(_parse_num(""))
+        self.assertIsNone(_parse_num("  "))
+
+    def test_garbage_returns_none(self):
+        self.assertIsNone(_parse_num("notanumber"))
 
 
 class TestComputeJA4(unittest.TestCase):
@@ -38,6 +58,30 @@ class TestComputeJA4(unittest.TestCase):
 
     def test_non_clienthello_returns_empty(self):
         self.assertEqual(compute_ja4("2", "0x0303", "", "", "", "", "", ""), "")
+
+    def test_empty_ciphers_returns_empty(self):
+        # Empty cipher list means TShark couldn't parse the packet; no degenerate JA4.
+        self.assertEqual(
+            compute_ja4("1", "0x0303", "0x0304", "example.com", "", "0,10,13", "h2", "0x0403"),
+            "",
+        )
+
+    def test_ciphers_without_0x_prefix(self):
+        # Older TShark may output cipher suites without 0x prefix.
+        # c02b (0xc02b=49195) and c02f (0xc02f=49199) must parse via hex fallback.
+        ja4_nopfx = compute_ja4(
+            handshake_type="1",
+            tls_version_hex="0x0303",
+            supported_versions_raw="0x0304,0x0303",
+            sni="example.com",
+            ciphersuites_raw="1301,1302,1303,c02b,c02f,009e",
+            extensions_raw="0,10,13,16,43",
+            alpn_raw="h2,http/1.1",
+            sig_algs_raw="0403,0804,0401",
+        )
+        # Cipher count and prefix should match the 0x-prefixed baseline
+        self.assertEqual(ja4_nopfx[:4], "t13d")
+        self.assertEqual(ja4_nopfx[4:6], "06")   # 6 ciphers parsed (not dropped)
 
     def test_extension_count_includes_sni_and_alpn(self):
         # 5 extension types (0=SNI,10,13,16=ALPN,43) -> count 05 in JA4_a.
