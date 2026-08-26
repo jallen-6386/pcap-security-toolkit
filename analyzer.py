@@ -109,6 +109,13 @@ from modules.auth_protocols import (
 from modules.dcerpc import detect_dcerpc_abuse, summarize_dcerpc_binds
 from modules.kerberos_attacks import detect_kerberos_attacks
 from modules.http_objects import export_http_objects
+from modules.http2_metadata import (
+    build_http2_body_previews,
+    build_http2_sessions,
+    extract_http2_bodies,
+    extract_http2_frames,
+    HTTP2_CSV_COLUMNS,
+)
 from modules.tshark_config import (
     is_valid_decode_as,
     set_decode_as,
@@ -776,6 +783,9 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
     extracted_payloads = []
     carved_files = []
 
+    http2_sessions = []
+    http2_body_rows = []
+
     beaconing_candidates = detect_beaconing(flow_data["flow_time_stats"], flow_data["flow_bytes"])
     credential_findings = []
     credential_posts = []
@@ -846,6 +856,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
             "ldap":         extract_ldap_fields,
             "dcerpc":       extract_dcerpc_fields,
             "tls":          extract_tls_metadata,
+            "http2":        extract_http2_frames,
         }
         extraction_results: dict = {}
         with ThreadPoolExecutor(max_workers=effective_workers) as executor:
@@ -878,6 +889,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         ldap_rows, ldap_err = extraction_results["ldap"]
         dcerpc_rows, dcerpc_err = extraction_results["dcerpc"]
         tls_rows, tls_err = extraction_results["tls"]
+        h2_frames, h2_err = extraction_results["http2"]
 
         for label, err in [
             ("HTTP request", http_err),
@@ -896,6 +908,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
             ("LDAP", ldap_err),
             ("DCERPC", dcerpc_err),
             ("TLS metadata", tls_err),
+            ("HTTP/2", h2_err),
             ("Protocol hierarchy", phs_err),
             ("Expert Info", expert_err),
             ("Credentials", cred_err),
@@ -926,6 +939,17 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         if http_rows:
             print("[*] Building HTTP body previews")
             http_body_previews = build_http_body_previews(http_rows)
+
+        if h2_frames:
+            print("[*] Reconstructing HTTP/2 sessions")
+            http2_sessions = build_http2_sessions(h2_frames)
+            # Body extraction writes decompressed body files; returns payload records
+            # in the same format as save_extracted_payloads for downstream analysis.
+            http2_body_rows = extract_http2_bodies(http2_sessions, case_output_dir)
+            # Normalized rows feed HTTP/1.x detection functions directly.
+            http_rows = http_rows + http2_sessions
+            http_body_previews = http_body_previews + build_http2_body_previews(http2_sessions)
+            extracted_payloads = extracted_payloads + http2_body_rows
 
         # Stream export and payload extraction
         if args.export_streams and stream_ids:
@@ -1259,6 +1283,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         "ldap_activity_count": len(ldap_activity),
         "dcerpc_bind_count": len(dcerpc_binds),
         "kerberos_attack_count": len(kerberos_attack_findings),
+        "http2_request_count": len(http2_sessions),
         "http_response_anomaly_count": len(http_response_anomalies),
         "carved_file_count": len(carved_files),
         "ioc_count": len(iocs),
@@ -1277,6 +1302,10 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
     write_json(case_output_dir / "report.json", report)
     write_csv(case_output_dir / "http_requests.csv", protocol_data["notable_http"])
     write_csv(case_output_dir / "http_tshark.csv", http_rows)
+    write_csv(
+        case_output_dir / "http2_requests.csv",
+        [{k: s[k] for k in HTTP2_CSV_COLUMNS if k in s} for s in http2_sessions],
+    )
     write_csv(case_output_dir / "http_responses.csv", http_response_rows)
     write_csv(case_output_dir / "http_body_previews.csv", http_body_previews)
     write_csv(case_output_dir / "tcp_stream_index.csv", tcp_stream_rows)

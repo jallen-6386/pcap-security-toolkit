@@ -917,6 +917,7 @@ class App(_Root):
             ("NTLM auth events",     report_data.get("ntlm_event_count", 0)),
             ("DCERPC binds",         report_data.get("dcerpc_bind_count", 0)),
             ("Kerberos attacks",     report_data.get("kerberos_attack_count", 0)),
+            ("HTTP/2 requests",      report_data.get("http2_request_count", 0)),
         ]
         for i, (label, value) in enumerate(stats):
             row = i // 3

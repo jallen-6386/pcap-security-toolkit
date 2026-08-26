@@ -406,9 +406,11 @@ output/
     ├── carved_files.csv
     ├── extracted_payloads_index.csv
     ├── http_objects.csv                ← HTTP files (chunked/gzip-decoded)
+    ├── http2_requests.csv              ← HTTP/2 request/response pairs (HEADERS + DATA)
     ├── extracted_payloads/
     ├── carved_files/
     ├── http_objects/
+    ├── http2_bodies/                   ← Decompressed HTTP/2 request and response bodies
     └── streams/
         ├── tcp_stream_0.ascii.txt
         └── tcp_stream_0.raw.txt
@@ -463,6 +465,7 @@ dialog (or drag several in).
 - `extracted_payloads_index.csv` + `extracted_payloads/`
 - `carved_files.csv` + `carved_files/`
 - `http_objects.csv` + `http_objects/` (HTTP files, chunked/gzip-decoded)
+- `http2_requests.csv` + `http2_bodies/` (HTTP/2 sessions: HEADERS decoded by TShark, DATA bodies decompressed)
 - `credential_findings.csv` + `credential_posts.csv`
 - `beaconing_candidates.csv` + `entropy_exfil_candidates.csv`
 - `lateral_movement_candidates.csv` + `protocol_anomalies.csv`
@@ -535,6 +538,16 @@ Forensic records of Windows authentication and RPC traffic:
 - `ntlm_activity.csv` — NTLM AUTHENTICATE events: `username`, `domain`, `hostname`, `has_server_challenge`, src/dst/stream. NTLM auth directed at an external host raises a `NTLM_EXTERNAL_AUTH` alert (possible relay/leak).
 - `ldap_activity.csv` — LDAP bind/search operations: `operation`, `bind_dn`, `auth_type`, `base_object`, `result_code`. A cleartext simple bind raises `LDAP_CLEARTEXT_BIND` (HIGH); 100+ search requests from one host raises `LDAP_ENUMERATION` (MEDIUM).
 - `dcerpc_activity.csv` — binds to recognized DCERPC interfaces: `interface`, `uuid`, `mitre_technique_id`, `alert_worthy`, src/dst/stream. Rare high-signal interfaces (DRSUAPI/DCSync, MS-EFSR/PetitPotam, task scheduler) raise alerts; common-but-abusable interfaces (svcctl, samr, lsarpc, winreg, srvsvc, spoolss) are recorded with their technique label but not alerted, to keep false positives low.
+
+### http2_requests.csv
+HTTP/2 request/response pairs reconstructed via TShark's native HPACK decoding and DATA frame reassembly:
+- `timestamp`, `src_ip`, `src_port`, `dst_ip`, `dst_port`, `tcp_stream`, `h2_stream_id`
+- `method`, `path`, `authority`, `scheme`, `status_code`, `user_agent`
+- `req_content_type`, `resp_content_type`, `content_encoding`, `resp_content_length`, `server`
+- `has_auth`, `has_cookie`, `redirect_location`
+- `request_body_size`, `response_body_size`, `request_body_preview`, `response_body_preview`
+
+Decompressed body files (gzip/deflate/brotli) are written under `http2_bodies/`. Response bodies and POST/PUT/PATCH request bodies are extracted and fed into the same downstream detection pipeline as HTTP/1.x: suspicious download detection, user-agent checks, credential scanning, entropy exfil detection, and YARA scanning.
 
 ### http_objects.csv
 Files reconstructed by TShark's `--export-objects http` (requires `--export-streams`), saved under `http_objects/`:
@@ -664,7 +677,6 @@ optional package (openpyxl, yara) skip cleanly when it is absent.
 
 ## Current Limitations
 
-- Full HTTP/2 body reconstruction is not supported
 - Deep HTTPS payload inspection requires TLS decryption material — supply it with `--tls-keylog` (SSLKEYLOGFILE); without it, TLS stays encrypted (metadata only)
 - TCP reassembly covers reconstructable plaintext streams only
 - Some fields (JA3/JA4 family, newer protocol fields) depend on TShark version; unavailable fields are detected via `tshark -G fields` and dropped automatically rather than failing the pass
@@ -736,5 +748,4 @@ Install Wireshark/TShark and ensure it is in your PATH. The toolkit also auto-de
 
 ## Future Improvements
 
-- Full HTTP/2 body reconstruction
 - Bundled GUI distribution (PyInstaller `.app` / `.exe`) for analysts without Python installed
