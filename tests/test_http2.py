@@ -2,11 +2,11 @@
 
 import unittest
 
+from modules.payloads import shannon_entropy
 from modules.http2_metadata import (
     _decode_h2_bytes,
     _expand_frames,
     _decompress,
-    _entropy,
     _looks_text,
     build_http2_body_previews,
     build_http2_sessions,
@@ -37,42 +37,51 @@ class TestDecodeH2Bytes(unittest.TestCase):
 class TestDecompress(unittest.TestCase):
     def test_identity_passthrough(self):
         data = b"hello world"
-        self.assertEqual(_decompress(data, "identity"), data)
+        self.assertEqual(_decompress(data, "identity"), (data, True))
 
     def test_empty_data(self):
-        self.assertEqual(_decompress(b"", "gzip"), b"")
+        self.assertEqual(_decompress(b"", "gzip"), (b"", True))
 
     def test_no_encoding(self):
         data = b"plain"
-        self.assertEqual(_decompress(data, ""), data)
+        self.assertEqual(_decompress(data, ""), (data, True))
 
     def test_gzip_roundtrip(self):
         import gzip as _gzip
         original = b"compressed payload"
         compressed = _gzip.compress(original)
-        self.assertEqual(_decompress(compressed, "gzip"), original)
+        self.assertEqual(_decompress(compressed, "gzip"), (original, True))
 
     def test_deflate_roundtrip(self):
         import zlib
         original = b"deflate payload"
         # zlib-wrapped deflate (most common)
         compressed = zlib.compress(original)
-        self.assertEqual(_decompress(compressed, "deflate"), original)
+        self.assertEqual(_decompress(compressed, "deflate"), (original, True))
 
-    def test_unknown_encoding_passthrough(self):
+    def test_unknown_encoding_reports_failure(self):
+        # An encoding we cannot decode must report ok=False so the caller can
+        # tell the analyst the stored body is still compressed.
         data = b"raw bytes"
-        self.assertEqual(_decompress(data, "snappy"), data)
+        self.assertEqual(_decompress(data, "snappy"), (data, False))
+
+    def test_corrupt_gzip_reports_failure(self):
+        self.assertEqual(_decompress(b"not gzip at all", "gzip"),
+                         (b"not gzip at all", False))
 
 
 class TestHelpers(unittest.TestCase):
+    """http2 body records use the project's shared shannon_entropy, so HTTP/1.x
+    and HTTP/2 payloads are scored identically by the exfil thresholds."""
+
     def test_entropy_zero_for_uniform(self):
         # Single repeated byte has zero entropy
-        self.assertAlmostEqual(_entropy(b"\x00" * 100), 0.0)
+        self.assertAlmostEqual(shannon_entropy(b"\x00" * 100), 0.0)
 
     def test_entropy_positive_for_random(self):
         # Mixed bytes have positive entropy
         data = bytes(range(256))
-        self.assertGreater(_entropy(data), 7.0)
+        self.assertGreater(shannon_entropy(data), 7.0)
 
     def test_looks_text_ascii(self):
         self.assertTrue(_looks_text(b"GET / HTTP/1.1\r\nHost: example.com\r\n"))

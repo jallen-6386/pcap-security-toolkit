@@ -4,6 +4,11 @@ customtkinter
 tkinterdnd2
 yara-python
 
+# Optional: brotli-compressed HTTP/2 body decompression (content-encoding: br)
+# Without it such bodies are stored still-compressed and the run warns.
+# Install with: pip install brotli
+# brotli
+
 # Optional: GeoIP/ASN enrichment
 # Requires a GeoLite2 .mmdb database file (free from https://dev.maxmind.com/geoip/geolite2-free-geolocation-data)
 # Install with: pip install maxminddb

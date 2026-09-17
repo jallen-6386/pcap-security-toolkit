@@ -46,6 +46,7 @@ _SHEET_ORDER = [
     "smtp_activity",
     "dns_resolutions",
     "http_requests",
+    "http2_requests",
     "http_body_previews",
     "http_tshark",
     "http_responses",

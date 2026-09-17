@@ -191,6 +191,7 @@ All Python requirements are installed automatically by `bootstrap.py`.
 
 **Optional:**
 - `maxminddb` + GeoLite2 database for GeoIP/ASN enrichment
+- `brotli` for decompressing `content-encoding: br` HTTP/2 bodies (common on modern sites). Without it those bodies are written to `http2_bodies/` still compressed, and the run prints a warning naming the encoding rather than failing silently.
 
 ---
 

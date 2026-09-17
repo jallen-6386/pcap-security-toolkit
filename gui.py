@@ -295,6 +295,19 @@ class App(_Root):
             text_color="#888888",
         ).pack(side="left", padx=10)
 
+        # Top N rows in the summary tables
+        row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
+        row.pack(fill="x", padx=15, pady=5)
+        ctk.CTkLabel(row, text="Top N:", width=110, anchor="w").pack(side="left")
+        self.top_var = tk.StringVar(value="10")
+        ctk.CTkEntry(row, textvariable=self.top_var, width=130).pack(side="left", padx=(5, 0))
+        ctk.CTkLabel(
+            row,
+            text="(rows per summary table: top talkers, protocols, conversations, hosts)",
+            font=ctk.CTkFont(size=11),
+            text_color="#888888",
+        ).pack(side="left", padx=10)
+
         # Decode-as (force dissector on non-standard ports)
         row = ctk.CTkFrame(self.input_frame, fg_color="transparent")
         row.pack(fill="x", padx=15, pady=5)
@@ -684,6 +697,12 @@ class App(_Root):
         if self.geoip_var.get() and self.geoip_path_var.get().strip():
             cmd += ["--geoip-db", self.geoip_path_var.get().strip()]
 
+        try:
+            top_n = int(self.top_var.get())
+            if top_n > 0:
+                cmd += ["--top", str(top_n)]
+        except ValueError:
+            pass
         cmd += ["--severity-filter", self.severity_var.get()]
         cmd += ["--output-format", self.format_var.get()]
         if self.min_ioc_conf_var.get() != "LOW":

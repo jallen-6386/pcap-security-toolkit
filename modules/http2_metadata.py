@@ -18,7 +18,6 @@ checks, credential detection, entropy exfil).
 
 import csv
 import gzip
-import hashlib
 import subprocess
 import tempfile
 import zlib
@@ -26,7 +25,7 @@ from pathlib import Path
 
 from modules.dependencies import find_tshark
 from modules.tshark_capabilities import filter_available_fields
-from modules.tshark_config import decode_as_args, runtime_args
+from modules.tshark_config import runtime_args
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -160,46 +159,44 @@ def _decode_h2_bytes(raw: str) -> bytes:
     return out
 
 
-def _decompress(data: bytes, encoding: str) -> bytes:
-    """Decompress body bytes given a Content-Encoding value.  Never raises."""
+def _decompress(data: bytes, encoding: str) -> tuple[bytes, bool]:
+    """
+    Decompress body bytes for a Content-Encoding value. Never raises.
+
+    Returns (data, ok). ok is False when the body was encoded but could not be
+    decompressed — most commonly `content-encoding: br` without the optional
+    brotli package installed, which is common on modern HTTP/2. The caller
+    surfaces that: writing a still-compressed body into http2_bodies/ as though
+    it were the real content would quietly mislead an analyst.
+    """
     enc = (encoding or "").lower().strip()
     if not data or not enc or enc == "identity":
-        return data
+        return data, True
     try:
         if enc in ("gzip", "x-gzip"):
-            return gzip.decompress(data)
+            return gzip.decompress(data), True
         if enc == "deflate":
             try:
-                return zlib.decompress(data)
+                return zlib.decompress(data), True
             except zlib.error:
-                return zlib.decompress(data, -15)  # raw deflate (no zlib header)
+                return zlib.decompress(data, -15), True  # raw deflate (no header)
         if enc in ("br", "brotli"):
-            try:
-                import brotli  # optional dependency
-                return brotli.decompress(data)
-            except (ImportError, Exception):
-                pass
+            import brotli  # optional dependency
+            return brotli.decompress(data), True
     except Exception:
-        pass
-    return data
-
-
-def _sha256_hex(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _entropy(data: bytes) -> float:
-    if not data:
-        return 0.0
-    import math
-    freq = {}
-    for b in data:
-        freq[b] = freq.get(b, 0) + 1
-    n = len(data)
-    return -sum((c / n) * math.log2(c / n) for c in freq.values())
+        return data, False
+    return data, False  # unrecognised encoding — body left as captured
 
 
 def _looks_text(data: bytes) -> bool:
+    """
+    Whether a body is worth rendering as a text preview.
+
+    Deliberately more permissive than payloads.looks_mostly_text(), which is
+    used for the is_text classification: that one rejects anything under 20
+    bytes, which would suppress the preview of a short form body such as
+    "user=a&pw=b". This only gates preview rendering, never classification.
+    """
     sample = data[:512]
     if not sample:
         return False
@@ -401,6 +398,7 @@ def build_http2_sessions(frames: list[dict]) -> list[dict]:
 
     # Phase 2 — flatten into CSV rows
     results = []
+    undecoded: dict[str, int] = {}
     for bucket in sessions.values():
         if "request_method" not in bucket and "response_status" not in bucket:
             continue  # stream with no readable HEADERS (e.g. PUSH_PROMISE)
@@ -409,8 +407,12 @@ def build_http2_sessions(frames: list[dict]) -> list[dict]:
         req_enc = bucket.get("req_content_encoding", "")
         resp_enc = bucket.get("resp_content_encoding", "")
 
-        req_body = _decode_body_from_bucket(bucket, "request", req_enc)
-        resp_body = _decode_body_from_bucket(bucket, "response", resp_enc)
+        req_body, req_ok = _decode_body_from_bucket(bucket, "request", req_enc)
+        resp_body, resp_ok = _decode_body_from_bucket(bucket, "response", resp_enc)
+        if not req_ok:
+            undecoded[req_enc] = undecoded.get(req_enc, 0) + 1
+        if not resp_ok:
+            undecoded[resp_enc] = undecoded.get(resp_enc, 0) + 1
 
         req_preview = ""
         if req_body and _looks_text(req_body):
@@ -475,11 +477,23 @@ def build_http2_sessions(frames: list[dict]) -> list[dict]:
 
         results.append(row)
 
+    for enc, count in sorted(undecoded.items()):
+        hint = "  (pip install brotli)" if enc in ("br", "brotli") else ""
+        print(f"[!] {count} HTTP/2 body(s) left compressed — "
+              f"no decoder for content-encoding '{enc}'{hint}")
+
     return results
 
 
-def _decode_body_from_bucket(bucket: dict, direction: str, encoding: str) -> bytes | None:
-    """Resolve bytes from a stream accumulator bucket, with decompression."""
+def _decode_body_from_bucket(
+    bucket: dict, direction: str, encoding: str
+) -> tuple[bytes | None, bool]:
+    """
+    Resolve bytes from a stream accumulator bucket, with decompression.
+
+    Returns (body_or_None, decompressed_ok). A stream with no body at all is
+    (None, True) — nothing failed, there was simply nothing to decode.
+    """
     reassembled_hex = bucket.get(f"{direction}_reassembled", "")
     raw_parts = bucket.get(f"{direction}_raw", [])
 
@@ -488,10 +502,10 @@ def _decode_body_from_bucket(bucket: dict, direction: str, encoding: str) -> byt
     elif raw_parts:
         raw = b"".join(_decode_h2_bytes(h) for h in raw_parts)
     else:
-        return None
+        return None, True
 
     if not raw:
-        return None
+        return None, True
 
     return _decompress(raw, encoding)
 
@@ -522,7 +536,13 @@ def extract_http2_bodies(
     Extracts both response bodies and request bodies (POST/PUT).
     Files go into output_dir/http2_bodies/.
     """
-    from modules.payloads import detect_file_signature, looks_mostly_text, decode_lossy, shannon_entropy
+    from modules.payloads import (
+        decode_lossy,
+        detect_file_signature,
+        looks_mostly_text,
+        sha256_hex,
+        shannon_entropy,
+    )
 
     bodies_dir = output_dir / "http2_bodies"
     results: list[dict] = []
@@ -581,8 +601,8 @@ def extract_http2_bodies(
                 "is_text":              is_text,
                 "size_bytes":           len(body),
                 "size_human":           f"{len(body)} B",
-                "sha256":               _sha256_hex(body),
-                "entropy":              round(_entropy(body[:4096]), 3),
+                "sha256":               sha256_hex(body),
+                "entropy":              round(shannon_entropy(body[:4096]), 3),
                 "detected_file_type":   file_type,
                 "detected_extension":   detected_ext,
                 "preview":              preview,
