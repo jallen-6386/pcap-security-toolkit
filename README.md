@@ -549,6 +549,10 @@ HTTP/2 request/response pairs reconstructed via TShark's native HPACK decoding a
 
 Decompressed body files (gzip/deflate/brotli) are written under `http2_bodies/`. Response bodies and POST/PUT/PATCH request bodies are extracted and fed into the same downstream detection pipeline as HTTP/1.x: suspicious download detection, user-agent checks, credential scanning, entropy exfil detection, and YARA scanning.
 
+**Getting HTTP/2 to dissect.** HTTP/2 is almost always carried inside TLS, so on a normal capture TShark cannot see it and this pass yields nothing — supply `--tls-keylog` to decrypt first. Cleartext HTTP/2 (h2c) on a non-standard port needs `--decode-as tcp.port==8080,http2`. A capture with no visible HTTP/2 simply produces an empty `http2_requests.csv`.
+
+One TCP segment usually carries several HTTP/2 frames, and TShark comma-aggregates their field values; the parser splits them back into individual frames. When a single segment carries HEADERS frames for two *different* streams, header values are matched to their frame by position, which can misattribute a value that itself contains a comma. A segment carrying one HEADERS frame — the common case — is always read verbatim.
+
 ### http_objects.csv
 Files reconstructed by TShark's `--export-objects http` (requires `--export-streams`), saved under `http_objects/`:
 - `filename`, `saved_path`, `size_bytes`, `sha256`, `entropy`, `detected_file_type`, `detected_extension`

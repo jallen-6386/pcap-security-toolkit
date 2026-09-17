@@ -867,8 +867,14 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
             phs_future = executor.submit(run_protocol_hierarchy, pcap_path)
             expert_future = executor.submit(run_expert_info, pcap_path)
             cred_future = executor.submit(run_credentials, pcap_path)
-            for future in as_completed(future_to_name):
-                extraction_results[future_to_name[future]] = future.result()
+            total_passes = len(future_to_name)
+            for done, future in enumerate(as_completed(future_to_name), start=1):
+                name = future_to_name[future]
+                extraction_results[name] = future.result()
+                # Each pass reads the whole capture, so report them as they land
+                # rather than leaving the phase silent until all have finished.
+                print(f"[*]   ({done}/{total_passes}) {name} extraction complete", flush=True)
+            print("[*]   waiting on statistics taps (hierarchy, expert info, credentials)", flush=True)
             protocol_hierarchy_rows, phs_raw, phs_err = phs_future.result()
             expert_info_rows, expert_raw, expert_err = expert_future.result()
             credential_tap_rows, cred_raw, cred_err = cred_future.result()
@@ -943,13 +949,11 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         if h2_frames:
             print("[*] Reconstructing HTTP/2 sessions")
             http2_sessions = build_http2_sessions(h2_frames)
-            # Body extraction writes decompressed body files; returns payload records
-            # in the same format as save_extracted_payloads for downstream analysis.
+            # Writes decompressed body files and returns payload records in the
+            # same shape as save_extracted_payloads. The merge into the detection
+            # inputs happens after the stream-export block below, which reassigns
+            # extracted_payloads wholesale.
             http2_body_rows = extract_http2_bodies(http2_sessions, case_output_dir)
-            # Normalized rows feed HTTP/1.x detection functions directly.
-            http_rows = http_rows + http2_sessions
-            http_body_previews = http_body_previews + build_http2_body_previews(http2_sessions)
-            extracted_payloads = extracted_payloads + http2_body_rows
 
         # Stream export and payload extraction
         if args.export_streams and stream_ids:
@@ -972,8 +976,13 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
                     executor.submit(export_follow_stream, pcap_path, sid, "raw"): sid
                     for sid in export_stream_ids
                 }
-                for future in as_completed(future_to_sid):
+                total_streams = len(future_to_sid)
+                for done, future in enumerate(as_completed(future_to_sid), start=1):
                     raw_results[future_to_sid[future]] = future.result()
+                    # One TShark follow pass per stream — report periodically so
+                    # a long export shows movement instead of appearing hung.
+                    if done % 5 == 0 or done == total_streams:
+                        print(f"[*]   exported {done}/{total_streams} streams", flush=True)
 
             for stream_id in export_stream_ids:
                 raw_content, raw_err = raw_results.get(stream_id, (None, "no result"))
@@ -1016,26 +1025,42 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         print("[!] TShark not found — skipping TShark-assisted extraction.")
 
     # ------------------------------------------------------------------
+    # HTTP/2 merge into the detection inputs
+    # ------------------------------------------------------------------
+    # build_http2_sessions normalises each row to the dotted TShark field names
+    # (http.*, ip.*, tcp.*, frame.time), so HTTP/2 traffic can be appended to the
+    # HTTP/1.x detection inputs and picked up by every detector unchanged.
+    #
+    # These combined lists are detection inputs. http_tshark.csv keeps the raw
+    # HTTP/1.x pass only — appending HTTP/2 rows there would emit blank-filled
+    # rows (write_csv takes its header from rows[0]) or, on a pure-HTTP/2
+    # capture, put the internal _request_body/_response_body byte blobs in the
+    # header. HTTP/2 has its own http2_requests.csv.
+    http_rows_all = http_rows + http2_sessions
+    http_previews_all = http_body_previews + build_http2_body_previews(http2_sessions)
+    payloads_all = extracted_payloads + http2_body_rows
+
+    # ------------------------------------------------------------------
     # Detections
     # ------------------------------------------------------------------
     print("[*] Extracting file indicators")
-    file_indicators = extract_file_indicators(http_rows, smb_rows, ftp_rows)
+    file_indicators = extract_file_indicators(http_rows_all, smb_rows, ftp_rows)
 
-    if http_body_previews or extracted_payloads:
+    if http_previews_all or payloads_all:
         print("[*] Detecting credential indicators")
-        credential_findings = find_credential_indicators(http_body_previews, extracted_payloads)
+        credential_findings = find_credential_indicators(http_previews_all, payloads_all)
 
-    if http_body_previews:
+    if http_previews_all:
         print("[*] Reconstructing credential POSTs")
-        credential_posts = reconstruct_credential_posts(http_body_previews)
+        credential_posts = reconstruct_credential_posts(http_previews_all)
 
-    if http_rows or extracted_payloads:
+    if http_rows_all or payloads_all:
         print("[*] Detecting suspicious downloads")
-        suspicious_downloads = build_suspicious_downloads(http_rows, extracted_payloads)
+        suspicious_downloads = build_suspicious_downloads(http_rows_all, payloads_all)
 
-    if extracted_payloads:
+    if payloads_all:
         print("[*] Detecting entropy-based exfil candidates")
-        entropy_exfil_candidates = detect_entropy_exfil_candidates(extracted_payloads)
+        entropy_exfil_candidates = detect_entropy_exfil_candidates(payloads_all)
 
     if tls_summary:
         print("[*] Enriching TLS metadata with JA4 fingerprints")
@@ -1050,16 +1075,16 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         print("[*] Detecting DNS tunneling candidates")
         dns_tunneling_candidates = detect_dns_tunneling(dns_rows)
 
-    if http_rows:
+    if http_rows_all:
         print("[*] Detecting suspicious user agents")
-        suspicious_user_agents = detect_suspicious_user_agents(http_rows)
+        suspicious_user_agents = detect_suspicious_user_agents(http_rows_all)
 
     print("[*] Detecting lateral movement candidates")
     lateral_movement_candidates = detect_lateral_movement(flow_data["flow_bytes"])
 
     print("[*] Detecting protocol anomalies")
     protocol_anomaly_findings = detect_protocol_anomalies(
-        http_rows, tls_summary, ftp_rows, smtp_rows, kerberos_rows
+        http_rows_all, tls_summary, ftp_rows, smtp_rows, kerberos_rows
     )
 
     if http_response_rows:
@@ -1102,7 +1127,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         if yara_rules_compiled:
             print("[*] Running YARA scanning")
             yara_targets = (
-                carved_files + extracted_payloads
+                carved_files + payloads_all
                 + smtp_attachments_list + http_objects_list
             )
             yara_hits = scan_files(yara_rules_compiled, yara_targets)
@@ -1119,7 +1144,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         print("[*] Scoring TCP streams for triage")
         stream_triage_rows = score_streams(
             stream_stats,
-            extracted_payloads=extracted_payloads,
+            extracted_payloads=payloads_all,
             carved_files=carved_files,
             credential_findings=credential_findings,
         )
@@ -1149,7 +1174,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
     alerts = build_alerts(
         flow_data["flow_bytes"],
         file_indicators,
-        http_body_previews=http_body_previews,
+        http_body_previews=http_previews_all,
         tls_summary=tls_summary,
         beaconing_candidates=beaconing_candidates,
         credential_findings=credential_findings,
@@ -1185,8 +1210,8 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         flow_bytes=flow_data["flow_bytes"],
         dns_rows=dns_rows,
         tls_summary=tls_summary,
-        http_rows=http_rows,
-        extracted_payloads=extracted_payloads,
+        http_rows=http_rows_all,
+        extracted_payloads=payloads_all,
         carved_files=carved_files,
         alerts=alerts,
         geoip_map=geoip_map,
@@ -1217,7 +1242,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         credential_findings=credential_findings,
         suspicious_downloads=suspicious_downloads,
         beaconing_candidates=beaconing_candidates,
-        http_body_previews=http_body_previews,
+        http_body_previews=http_previews_all,
         tls_sni_anomalies=tls_sni_anomalies,
         suspicious_user_agents=suspicious_user_agents,
         lateral_movement_candidates=lateral_movement_candidates,
@@ -1245,10 +1270,10 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         "top_http_hosts": protocol_data["http_hosts"].most_common(args.top),
         "top_http_user_agents": protocol_data["http_user_agents"].most_common(args.top),
         "tcp_stream_count": len(stream_ids),
-        "http_body_preview_count": len(http_body_previews),
+        "http_body_preview_count": len(http_previews_all),
         "tls_metadata_count": len(tls_summary),
         "file_indicators_count": len(file_indicators),
-        "extracted_payload_count": len(extracted_payloads),
+        "extracted_payload_count": len(payloads_all),
         "credential_finding_count": len(credential_findings),
         "credential_post_count": len(credential_posts),
         "suspicious_download_count": len(suspicious_downloads),
@@ -1307,7 +1332,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
         [{k: s[k] for k in HTTP2_CSV_COLUMNS if k in s} for s in http2_sessions],
     )
     write_csv(case_output_dir / "http_responses.csv", http_response_rows)
-    write_csv(case_output_dir / "http_body_previews.csv", http_body_previews)
+    write_csv(case_output_dir / "http_body_previews.csv", http_previews_all)
     write_csv(case_output_dir / "tcp_stream_index.csv", tcp_stream_rows)
     write_csv(case_output_dir / "tls_metadata.csv", tls_summary)
     write_csv(case_output_dir / "tls_sni_anomalies.csv", tls_sni_anomalies)
@@ -1376,7 +1401,7 @@ def analyze_pcap(pcap_path, args, case_output_dir, run_context):
     write_csv(case_output_dir / "alerts.csv", alerts)
     write_extracted_payload_index(
         case_output_dir / "extracted_payloads_index.csv",
-        extracted_payloads,
+        payloads_all,
     )
 
     # Excel workbook — consolidates all non-empty CSVs into one file

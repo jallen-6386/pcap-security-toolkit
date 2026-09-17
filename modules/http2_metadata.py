@@ -19,8 +19,8 @@ checks, credential detection, entropy exfil).
 import csv
 import gzip
 import hashlib
-import io
 import subprocess
+import tempfile
 import zlib
 from pathlib import Path
 
@@ -108,16 +108,30 @@ def extract_http2_frames(pcap_path) -> tuple[list[dict], str | None]:
         "-E", "quote=n",
     ])
 
+    # Stream the output instead of buffering it whole. TShark renders DATA
+    # payloads as colon-separated hex (3 chars per byte) and emits both the
+    # per-frame payload and the reassembled body, so a capture carrying real
+    # HTTP/2 volume produces far more output than the capture itself. Buffering
+    # that into a string, copying it into a StringIO and then materialising the
+    # rows held three copies at once. stderr goes to a temp file so chatty
+    # dissector warnings cannot fill a pipe buffer and deadlock the pass.
+    rows: list[dict] = []
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errfile:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=errfile, text=True, bufsize=1
+            )
+            for row in csv.DictReader(proc.stdout, delimiter="\t"):
+                rows.append(row)
+            proc.stdout.close()
+            returncode = proc.wait()
+            errfile.seek(0)
+            err = errfile.read().strip()
     except Exception as exc:
         return [], str(exc)
 
-    if result.returncode != 0:
-        return [], result.stderr.strip() or f"tshark exited {result.returncode}"
-
-    reader = csv.DictReader(io.StringIO(result.stdout), delimiter="\t")
-    rows = list(reader)
+    if returncode != 0:
+        return [], err or f"tshark exited {returncode}"
     return rows, None
 
 
@@ -221,6 +235,94 @@ def _accumulate_body(bucket: dict, direction: str, hex_val: str, reassembled: st
         bucket[key_size] = bucket.get(key_size, 0) + len(hex_val) // 2
 
 
+# Fields TShark emits only for HEADERS frames.
+_HEADER_VALUE_FIELDS = (
+    "http2.headers.method", "http2.headers.path", "http2.headers.authority",
+    "http2.headers.scheme", "http2.headers.status", "http2.headers.content_type",
+    "http2.headers.content_encoding", "http2.headers.content_length",
+    "http2.headers.user_agent", "http2.headers.authorization",
+    "http2.headers.cookie", "http2.headers.location", "http2.headers.server",
+)
+
+# Per-packet fields that are the same for every frame in that packet.
+_BASE_FIELDS = (
+    "frame.number", "frame.time_epoch", "ip.src", "tcp.srcport",
+    "ip.dst", "tcp.dstport", "tcp.stream",
+)
+
+
+def _expand_frames(row: dict) -> list[dict]:
+    """
+    Expand one TShark packet row into one dict per HTTP/2 frame it carries.
+
+    A single TCP segment routinely carries several HTTP/2 frames — that is the
+    whole point of multiplexing — and TShark comma-aggregates the per-frame
+    values, so http2.type arrives as e.g. "1,0" for a HEADERS+DATA segment.
+    Reading that as one integer raises and drops the entire packet, which loses
+    most of a real capture.
+
+    http2.type and http2.streamid are emitted for every frame, so those two
+    lists align and give the frame sequence. Header and DATA fields are sparse —
+    only the frames carrying them contribute a value — so they are matched to
+    their frame by position within the frames of that type.
+    """
+    types = [t.strip() for t in (row.get("http2.type") or "").split(",") if t.strip()]
+    sids = [s.strip() for s in (row.get("http2.streamid") or "").split(",") if s.strip()]
+
+    # Single frame (or unalignable): use the row verbatim. Taking values as-is
+    # matters — a header value may itself contain a comma (User-Agent, Accept).
+    if len(types) <= 1 or len(types) != len(sids):
+        return [row]
+
+    header_positions = [i for i, t in enumerate(types) if t == str(_TYPE_HEADERS)]
+    data_positions = [i for i, t in enumerate(types) if t == str(_TYPE_DATA)]
+    data_values = [v for v in (row.get("http2.data.data") or "").split(",") if v.strip()]
+    reassembled = [v for v in (row.get("http2.body.reassembled.data") or "").split(",") if v.strip()]
+
+    expanded = []
+    for i, (ftype, sid) in enumerate(zip(types, sids)):
+        frame = {k: row.get(k, "") for k in _BASE_FIELDS}
+        frame["http2.type"] = ftype
+        frame["http2.streamid"] = sid
+        frame["http2.flags.end_stream"] = row.get("http2.flags.end_stream", "")
+        frame["http2.data.data"] = ""
+        frame["http2.body.reassembled.data"] = ""
+        for field in _HEADER_VALUE_FIELDS:
+            frame[field] = ""
+
+        if ftype == str(_TYPE_HEADERS):
+            k = header_positions.index(i)
+            for field in _HEADER_VALUE_FIELDS:
+                raw = row.get(field, "") or ""
+                if not raw:
+                    continue
+                if len(header_positions) == 1:
+                    # Only one HEADERS frame here, so the value is wholly its
+                    # own — keep it verbatim rather than splitting on commas
+                    # that may be part of the header value itself.
+                    frame[field] = raw
+                else:
+                    parts = raw.split(",")
+                    frame[field] = parts[k].strip() if k < len(parts) else ""
+        elif ftype == str(_TYPE_DATA):
+            k = data_positions.index(i)
+            if k < len(data_values):
+                frame["http2.data.data"] = data_values[k]
+            if len(reassembled) == len(data_positions):
+                frame["http2.body.reassembled.data"] = reassembled[k]
+            elif reassembled and k == len(data_positions) - 1:
+                # Reassembly is reported on the frame that completes the body.
+                frame["http2.body.reassembled.data"] = reassembled[-1]
+        expanded.append(frame)
+    return expanded
+
+
+def _iter_frames(packets):
+    """Yield every HTTP/2 frame across all packet rows, without materialising them."""
+    for packet in packets:
+        yield from _expand_frames(packet)
+
+
 def build_http2_sessions(frames: list[dict]) -> list[dict]:
     """
     Group HTTP/2 frames by (tcp.stream, http2.streamid) and build one dict
@@ -233,10 +335,10 @@ def build_http2_sessions(frames: list[dict]) -> list[dict]:
     if not frames:
         return []
 
-    # Phase 1 — accumulate per-stream state
+    # Phase 1 — accumulate per-stream state, one entry per HTTP/2 frame
     sessions: dict[tuple, dict] = {}
 
-    for row in frames:
+    for row in _iter_frames(frames):
         key = _h2_key(row)
         tcp_stream = row.get("tcp.stream", "")
         h2_sid = row.get("http2.streamid", "")
@@ -350,14 +452,26 @@ def build_http2_sessions(frames: list[dict]) -> list[dict]:
             "_response_body":       resp_body,
         }
 
-        # Normalised HTTP/1.x-style keys for detection functions
+        # Normalised HTTP/1.x-style keys so these rows feed the existing
+        # detection functions directly. The ip./tcp./frame. identity fields
+        # matter as much as the http.* ones: the detectors use them to attribute
+        # a finding to a host and stream, and detect_suspicious_user_agents
+        # groups by ip.src — without it every HTTP/2 row collapses into a single
+        # blank-IP bucket and fabricates a multi-user-agent anomaly.
         row["http.request.method"] = row["method"]
         row["http.request.uri"]    = row["path"]
         row["http.host"]           = row["authority"]
         row["http.user_agent"]     = row["user_agent"]
         row["http.content_type"]   = row["resp_content_type"] or row["req_content_type"]
+        row["http.content_length"] = row["resp_content_length"]
         row["http.response.code"]  = row["status_code"]
         row["http.file_data"]      = req_preview  # POST body preview for credential scan
+        row["ip.src"]              = row["src_ip"]
+        row["ip.dst"]              = row["dst_ip"]
+        row["tcp.srcport"]         = row["src_port"]
+        row["tcp.dstport"]         = row["dst_port"]
+        row["tcp.stream"]          = row["tcp_stream"]
+        row["frame.time"]          = row["timestamp"]
 
         results.append(row)
 
@@ -466,6 +580,7 @@ def extract_http2_bodies(
                 "filename":             filename,
                 "is_text":              is_text,
                 "size_bytes":           len(body),
+                "size_human":           f"{len(body)} B",
                 "sha256":               _sha256_hex(body),
                 "entropy":              round(_entropy(body[:4096]), 3),
                 "detected_file_type":   file_type,
@@ -508,14 +623,24 @@ def build_http2_body_previews(sessions: list[dict]) -> list[dict]:
                 file_data = ""
         if not file_data:
             continue
+        # Must match build_http_body_previews() exactly: the credential
+        # detectors read "body_preview" (not "file_data") and attribute each
+        # finding via src_ip/dst_ip/tcp_stream. A mismatched key here is silent
+        # — the row is kept but scanned as empty text.
         previews.append({
+            "frame_number":   "",
+            "timestamp":      session.get("timestamp", ""),
+            "src_ip":         session.get("src_ip", ""),
+            "src_port":       session.get("src_port", ""),
+            "dst_ip":         session.get("dst_ip", ""),
+            "dst_port":       session.get("dst_port", ""),
+            "tcp_stream":     session.get("tcp_stream", ""),
             "http_method":    method,
             "host":           session.get("authority", ""),
             "uri":            session.get("path", ""),
             "content_type":   session.get("req_content_type", ""),
-            "content_length": session.get("resp_content_length", ""),
-            "file_data":      file_data,
-            "src_ip":         session.get("src_ip", ""),
+            "content_length": session.get("req_content_length", ""),
+            "body_preview":   file_data[:500],
         })
     return previews
 

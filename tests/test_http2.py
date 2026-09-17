@@ -4,6 +4,7 @@ import unittest
 
 from modules.http2_metadata import (
     _decode_h2_bytes,
+    _expand_frames,
     _decompress,
     _entropy,
     _looks_text,
@@ -192,6 +193,29 @@ class TestBuildHttp2Sessions(unittest.TestCase):
         body = sessions[0].get("_response_body")
         self.assertEqual(body, b"Hello")
 
+    def test_session_carries_identity_fields(self):
+        """Detectors attribute findings via ip.src/ip.dst/tcp.stream/frame.time.
+        Without them, findings come back with blank hosts and
+        detect_suspicious_user_agents collapses every HTTP/2 row into one
+        blank-IP bucket, fabricating a multi-user-agent anomaly."""
+        req = self._make_headers_frame(7, 1, method="GET",
+                                       src_ip="10.0.0.1", dst_ip="10.0.0.2")
+        s = build_http2_sessions([req])[0]
+        self.assertEqual(s["ip.src"], "10.0.0.1")
+        self.assertEqual(s["ip.dst"], "10.0.0.2")
+        self.assertEqual(s["tcp.stream"], "7")
+        self.assertEqual(s["tcp.srcport"], "54321")
+        self.assertEqual(s["tcp.dstport"], "443")
+        self.assertTrue(s["frame.time"])
+
+    def test_internal_body_keys_never_reach_csv(self):
+        """_request_body/_response_body hold raw bytes up to 10 MB. write_csv
+        takes its header from rows[0], so on a pure-HTTP/2 capture these would
+        otherwise be written into a CSV as binary reprs."""
+        for internal in ("_request_body", "_response_body"):
+            self.assertNotIn(internal, HTTP2_CSV_COLUMNS)
+        self.assertFalse([c for c in HTTP2_CSV_COLUMNS if c.startswith("_")])
+
     def test_csv_columns_are_subset_of_session_keys(self):
         # Every column in HTTP2_CSV_COLUMNS must be present in session output
         req = self._make_headers_frame(10, 1, method="GET")
@@ -201,6 +225,73 @@ class TestBuildHttp2Sessions(unittest.TestCase):
         self.assertEqual(len(sessions), 1)
         for col in HTTP2_CSV_COLUMNS:
             self.assertIn(col, sessions[0], f"Missing CSV column: {col}")
+
+
+class TestMultiFramePackets(unittest.TestCase):
+    """A single TCP segment routinely carries several HTTP/2 frames — that is
+    what multiplexing means — and TShark comma-aggregates them, so http2.type
+    arrives as e.g. "1,0". Parsing that as one integer raised and dropped the
+    whole packet, which lost most of a real capture."""
+
+    def _packet(self, **over):
+        row = {
+            "frame.number": "6", "frame.time_epoch": "1700000000.5",
+            "ip.src": "10.0.0.2", "tcp.srcport": "8080",
+            "ip.dst": "10.0.0.1", "tcp.dstport": "50001",
+            "tcp.stream": "0",
+            "http2.streamid": "1,1", "http2.type": "1,0",
+            "http2.flags.end_stream": "0",
+            "http2.headers.method": "", "http2.headers.path": "",
+            "http2.headers.authority": "", "http2.headers.scheme": "",
+            "http2.headers.status": "200",
+            "http2.headers.content_type": "application/json",
+            "http2.headers.content_encoding": "",
+            "http2.headers.content_length": "",
+            "http2.headers.user_agent": "", "http2.headers.authorization": "",
+            "http2.headers.cookie": "", "http2.headers.location": "",
+            "http2.headers.server": "",
+            "http2.data.data": "48:65:6c:6c:6f",
+            "http2.body.reassembled.data": "",
+        }
+        row.update(over)
+        return row
+
+    def test_headers_and_data_in_one_packet_both_parsed(self):
+        frames = _expand_frames(self._packet())
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(frames[0]["http2.type"], "1")
+        self.assertEqual(frames[0]["http2.headers.status"], "200")
+        self.assertEqual(frames[1]["http2.type"], "0")
+        self.assertEqual(frames[1]["http2.data.data"], "48:65:6c:6c:6f")
+
+    def test_session_built_from_multi_frame_packet(self):
+        sessions = build_http2_sessions([self._packet()])
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual(sessions[0]["status_code"], "200")
+        self.assertEqual(sessions[0]["_response_body"], b"Hello")
+
+    def test_single_frame_values_kept_verbatim(self):
+        # A lone HEADERS frame must not be comma-split: real header values
+        # (User-Agent, Accept) legitimately contain commas.
+        pkt = self._packet(**{
+            "http2.type": "1", "http2.streamid": "1",
+            "http2.headers.user_agent": "Mozilla/5.0 (X11; Linux, x86_64)",
+            "http2.data.data": "",
+        })
+        frames = _expand_frames(pkt)
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0]["http2.headers.user_agent"],
+                         "Mozilla/5.0 (X11; Linux, x86_64)")
+
+    def test_two_data_frames_split_by_position(self):
+        pkt = self._packet(**{
+            "http2.type": "0,0", "http2.streamid": "1,1",
+            "http2.headers.status": "",
+            "http2.data.data": "48:65:6c,6c:6f",
+        })
+        frames = _expand_frames(pkt)
+        self.assertEqual([f["http2.data.data"] for f in frames],
+                         ["48:65:6c", "6c:6f"])
 
 
 class TestBuildHttp2BodyPreviews(unittest.TestCase):
@@ -225,12 +316,30 @@ class TestBuildHttp2BodyPreviews(unittest.TestCase):
         body = b"username=admin&password=secret"
         previews = build_http2_body_previews([self._session("POST", body)])
         self.assertEqual(len(previews), 1)
-        self.assertIn("secret", previews[0]["file_data"])
+        self.assertIn("secret", previews[0]["body_preview"])
         self.assertEqual(previews[0]["host"], "host.example")
 
     def test_post_without_body_excluded(self):
         previews = build_http2_body_previews([self._session("POST", None)])
         self.assertEqual(previews, [])
+
+    def test_preview_schema_matches_http1_exactly(self):
+        """HTTP/2 previews are merged with HTTP/1.x ones and read by the same
+        credential detectors, so the key sets must match exactly. A mismatch is
+        silent: the row survives but is scanned as empty text."""
+        from modules.files import build_http_body_previews
+        http1 = build_http_body_previews([{
+            "frame.number": "1", "frame.time": "t", "ip.src": "10.0.0.1",
+            "tcp.srcport": "1", "ip.dst": "10.0.0.2", "tcp.dstport": "80",
+            "tcp.stream": "0", "http.request.method": "POST",
+            "http.host": "h", "http.request.uri": "/u",
+            "http.content_type": "ct", "http.content_length": "5",
+            "http.file_data": "user=a&pass=b",
+        }])
+        h2 = build_http2_body_previews([self._session("POST", b"user=a&pass=b")])
+        self.assertEqual(len(http1), 1)
+        self.assertEqual(len(h2), 1)
+        self.assertEqual(set(http1[0].keys()), set(h2[0].keys()))
 
 
 class TestExtractHttp2Bodies(unittest.TestCase):
